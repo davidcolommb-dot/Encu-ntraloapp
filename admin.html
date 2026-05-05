@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin - Catálogos</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #f5f3ee; --surface: #fffefb; --border: #e2dfd6; --text: #1a1917;
+    --muted: #8a8780; --accent: #b8893f; --green: #2d6a4f; --green-bg: #eaf4ef;
+    --red: #991b1b; --red-bg: #fee2e2; --amber: #92400e; --amber-bg: #fef3c7;
+  }
+  body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); }
+  header { background: #1a1917; color: #f5f3ee; padding: 18px 32px; display: flex; align-items: center; gap: 16px; }
+  header .logo-mark { width: 32px; height: 32px; border: 1px solid var(--accent); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--accent); font-style: italic; }
+  header h1 { font-size: 22px; font-weight: 400; }
+  header .badge { margin-left: auto; font-size: 11px; padding: 4px 10px; border-radius: 4px; background: rgba(184, 137, 63, 0.15); color: var(--accent); font-family: monospace; }
+  header .logout-btn { background: transparent; color: #8a8780; border: 1px solid #2a2926; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+  .grid { display: grid; grid-template-columns: 1fr 2fr; gap: 24px; }
+  @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; }
+  .panel h2 { font-size: 22px; font-weight: 400; margin-bottom: 4px; }
+  .panel-desc { color: var(--muted); font-size: 13px; margin-bottom: 20px; line-height: 1.6; }
+  label { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  input { width: 100%; background: #faf8f3; border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: 14px; color: var(--text); margin-bottom: 14px; font-family: inherit; }
+  input:focus { outline: none; border-color: var(--accent); }
+  .btn { padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 500; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-family: inherit; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primario { background: #1a1917; color: #f5f3ee; width: 100%; justify-content: center; }
+  .btn-pequeno { padding: 6px 12px; font-size: 12px; background: var(--surface); border: 1px solid var(--border); color: var(--text); }
+  .btn-eliminar { padding: 6px 12px; font-size: 12px; background: var(--red-bg); color: var(--red); border: 1px solid #fbcaca; }
+  .estado-mensaje { padding: 12px 14px; border-radius: 8px; font-size: 13px; margin: 12px 0; display: none; }
+  .estado-mensaje.exito { background: var(--green-bg); color: var(--green); border: 1px solid #c8e0d3; display: block; }
+  .estado-mensaje.error { background: var(--red-bg); color: var(--red); border: 1px solid #fbcaca; display: block; }
+  .estado-mensaje.cargando { background: var(--amber-bg); color: var(--amber); border: 1px solid #fde68a; display: block; }
+  .lista-proveedores { display: flex; flex-direction: column; gap: 10px; }
+  .proveedor-item { background: #faf8f3; border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; }
+  .proveedor-info { flex: 1; }
+  .proveedor-info .nombre { font-weight: 500; font-size: 14px; }
+  .proveedor-info .meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .vacio { text-align: center; color: var(--muted); font-size: 13px; padding: 32px 20px; font-style: italic; }
+  .progreso { height: 4px; background: var(--border); border-radius: 2px; margin: 12px 0; overflow: hidden; display: none; }
+  .progreso-bar { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s; }
+  .login-overlay { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 100; padding: 20px; }
+  .login-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 32px; max-width: 400px; width: 100%; }
+  .login-card h2 { font-size: 28px; font-weight: 400; margin-bottom: 6px; }
+  .login-tabs { display: flex; gap: 4px; margin: 16px 0; background: #faf8f3; padding: 4px; border-radius: 8px; }
+  .login-tab { flex: 1; padding: 8px; border: none; background: transparent; cursor: pointer; font-size: 13px; color: var(--muted); border-radius: 6px; font-family: inherit; }
+  .login-tab.active { background: var(--surface); color: var(--text); font-weight: 500; }
+</style>
+</head>
+<body>
+
+<div class="login-overlay" id="overlay-config" style="display:none">
+  <div class="login-card">
+    <h2 id="login-titulo">Conectar Supabase</h2>
+    <p class="panel-desc" id="login-desc">Pega los datos de tu proyecto. Solo se piden la primera vez.</p>
+
+    <div id="paso-config">
+      <label>URL de Supabase</label>
+      <input type="text" id="cfg-url" placeholder="https://xxxxx.supabase.co">
+      <label>Anon Key (clave PÚBLICA)</label>
+      <input type="text" id="cfg-anon" placeholder="eyJhbGc...">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:14px;line-height:1.5">
+        Settings → API → anon public · NUNCA pegues aquí la service_role
+      </div>
+      <button class="btn btn-primario" onclick="guardarConfigYContinuar()">Continuar</button>
+    </div>
+
+    <div id="paso-login" style="display:none">
+      <div class="login-tabs">
+        <button class="login-tab active" id="tab-login" onclick="mostrarTab('login')">Entrar</button>
+        <button class="login-tab" id="tab-registro" onclick="mostrarTab('registro')">Crear cuenta</button>
+      </div>
+      <label>Email</label>
+      <input type="email" id="login-email" placeholder="tu@email.com">
+      <label>Contraseña</label>
+      <input type="password" id="login-pass" placeholder="Mínimo 6 caracteres">
+      <div id="login-mensaje" class="estado-mensaje"></div>
+      <button class="btn btn-primario" id="btn-accion-login" onclick="hacerLogin()">Entrar</button>
+      <button class="btn btn-pequeno" style="width:100%;margin-top:8px" onclick="resetearConfig()">Cambiar URL/Key</button>
+    </div>
+  </div>
+</div>
+
+<header style="display:none" id="header-app">
+  <div class="logo-mark">C</div>
+  <h1>Catálogos · Admin</h1>
+  <span class="badge" id="badge-usuario">...</span>
+  <button class="logout-btn" onclick="cerrarSesion()">Salir</button>
+</header>
+
+<div class="container" id="contenido-app" style="display:none">
+  <div class="grid">
+    <div class="panel">
+      <h2>Subir catálogo</h2>
+      <p class="panel-desc">Sube un PDF de un proveedor. Claude lo analizará y extraerá todos los productos.</p>
+      <label>Nombre del proveedor</label>
+      <input type="text" id="proveedor-nombre" placeholder="Ej: Bosch España">
+      <label>Archivo PDF</label>
+      <input type="file" id="archivo-pdf" accept="application/pdf">
+      <div class="progreso" id="progreso"><div class="progreso-bar" id="progreso-bar"></div></div>
+      <div id="estado-mensaje" class="estado-mensaje"></div>
+      <button class="btn btn-primario" id="btn-subir" onclick="subirCatalogo()">Subir e indexar con Claude</button>
+    </div>
+    <div class="panel">
+      <h2>Proveedores indexados</h2>
+      <p class="panel-desc">Catálogos disponibles para los comerciales en su app móvil.</p>
+      <div class="lista-proveedores" id="lista-proveedores"><div class="vacio">Cargando...</div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const CONFIG_KEY = 'admin_config_v2';
+let db = null;
+let usuario = null;
+let modoLogin = 'login';
+
+function obtenerConfig() {
+  try { return JSON.parse(localStorage.getItem(CONFIG_KEY) || '{}'); } catch { return {}; }
+}
+
+function guardarConfigYContinuar() {
+  const url = document.getElementById('cfg-url').value.trim();
+  const anon = document.getElementById('cfg-anon').value.trim();
+  if (!url || !anon) { alert('Rellena ambos campos'); return; }
+  if (anon.length < 100) { alert('Esa no parece la anon key. Debe ser muy larga y empezar por "eyJ..."'); return; }
+  localStorage.setItem(CONFIG_KEY, JSON.stringify({ url, anon }));
+  inicializarCliente();
+  mostrarLogin();
+}
+
+function resetearConfig() {
+  if (!confirm('¿Borrar la configuración guardada?')) return;
+  localStorage.removeItem(CONFIG_KEY);
+  location.reload();
+}
+
+function inicializarCliente() {
+  const cfg = obtenerConfig();
+  if (cfg.url && cfg.anon) {
+    db = window.supabase.createClient(cfg.url, cfg.anon);
+    return true;
+  }
+  return false;
+}
+
+function mostrarTab(tab) {
+  modoLogin = tab;
+  document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+  document.getElementById('tab-registro').classList.toggle('active', tab === 'registro');
+  document.getElementById('btn-accion-login').textContent = tab === 'login' ? 'Entrar' : 'Crear cuenta';
+  document.getElementById('login-titulo').textContent = tab === 'login' ? 'Iniciar sesión' : 'Crear cuenta admin';
+  document.getElementById('login-desc').textContent = tab === 'login' ? 'Entra con tu cuenta' : 'Crea la primera cuenta admin';
+}
+
+function mostrarLogin() {
+  document.getElementById('paso-config').style.display = 'none';
+  document.getElementById('paso-login').style.display = 'block';
+}
+
+async function hacerLogin() {
+  const email = document.getElementById('login-email').value.trim();
+  const pass = document.getElementById('login-pass').value;
+  const msg = document.getElementById('login-mensaje');
+  const btn = document.getElementById('btn-accion-login');
+  if (!email || !pass) { msg.className = 'estado-mensaje error'; msg.textContent = 'Rellena email y contraseña'; return; }
+  btn.disabled = true;
+  btn.textContent = modoLogin === 'login' ? 'Entrando...' : 'Creando...';
+  msg.className = 'estado-mensaje cargando'; msg.textContent = 'Procesando...';
+  try {
+    const resp = modoLogin === 'login'
+      ? await db.auth.signInWithPassword({ email, password: pass })
+      : await db.auth.signUp({ email, password: pass });
+    if (resp.error) throw resp.error;
+    if (modoLogin === 'registro' && !resp.data.session) {
+      msg.className = 'estado-mensaje exito';
+      msg.textContent = 'Cuenta creada. Revisa tu email para confirmarla y luego entra.';
+      btn.disabled = false; btn.textContent = 'Crear cuenta';
+      return;
+    }
+    usuario = resp.data.user;
+    mostrarApp();
+  } catch (err) {
+    msg.className = 'estado-mensaje error';
+    msg.textContent = 'Error: ' + err.message;
+    btn.disabled = false;
+    btn.textContent = modoLogin === 'login' ? 'Entrar' : 'Crear cuenta';
+  }
+}
+
+async function cerrarSesion() {
+  await db.auth.signOut();
+  location.reload();
+}
+
+function mostrarApp() {
+  document.getElementById('overlay-config').style.display = 'none';
+  document.getElementById('header-app').style.display = 'flex';
+  document.getElementById('contenido-app').style.display = 'block';
+  document.getElementById('badge-usuario').textContent = usuario.email;
+  cargarProveedores();
+}
+
+async function cargarProveedores() {
+  if (!db) return;
+  const lista = document.getElementById('lista-proveedores');
+  const { data, error } = await db.from('proveedores').select('id, nombre, total_paginas, pdf_url, creado_en').order('creado_en', { ascending: false });
+  if (error) { lista.innerHTML = '<div class="vacio">Error: ' + error.message + '</div>'; return; }
+  if (!data || data.length === 0) { lista.innerHTML = '<div class="vacio">No hay catálogos. Sube el primero arriba.</div>'; return; }
+  lista.innerHTML = data.map(p => '<div class="proveedor-item"><div class="proveedor-info"><div class="nombre">' + escapar(p.nombre) + '</div><div class="meta">' + (p.total_paginas || 0) + ' productos · ' + formatearFecha(p.creado_en) + '</div></div>' + (p.pdf_url ? '<a href="' + p.pdf_url + '" target="_blank" class="btn btn-pequeno">Ver PDF</a>' : '') + '<button class="btn btn-eliminar" onclick="eliminarProveedor(\'' + p.id + '\', \'' + escapar(p.nombre) + '\')">Eliminar</button></div>').join('');
+}
+
+async function subirCatalogo() {
+  const cfg = obtenerConfig();
+  const nombre = document.getElementById('proveedor-nombre').value.trim();
+  const archivo = document.getElementById('archivo-pdf').files[0];
+  if (!nombre || !archivo) { mostrarMensaje('Faltan datos: nombre y PDF', 'error'); return; }
+  const btn = document.getElementById('btn-subir');
+  btn.disabled = true; btn.textContent = 'Subiendo PDF...';
+  const progreso = document.getElementById('progreso');
+  const progresoBar = document.getElementById('progreso-bar');
+  progreso.style.display = 'block'; progresoBar.style.width = '20%';
+  try {
+    const nombreArchivo = Date.now() + '_' + nombre.replace(/[^a-z0-9]/gi, '_') + '.pdf';
+    const { error: errSubida } = await db.storage.from('catalogos').upload(nombreArchivo, archivo, { contentType: 'application/pdf', upsert: true });
+    if (errSubida) throw errSubida;
+    progresoBar.style.width = '40%';
+    const { data: urlData } = db.storage.from('catalogos').getPublicUrl(nombreArchivo);
+    const pdfUrl = urlData.publicUrl;
+    btn.textContent = 'Claude está analizando el PDF...';
+    progresoBar.style.width = '60%';
+    mostrarMensaje('Claude está extrayendo productos. Esto puede tardar 1-2 minutos...', 'cargando');
+    const { data: { session } } = await db.auth.getSession();
+    const token = session?.access_token || cfg.anon;
+    const respuesta = await fetch(cfg.url + '/functions/v1/indexar-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'apikey': cfg.anon },
+      body: JSON.stringify({ proveedor_nombre: nombre, pdf_url: pdfUrl }),
+    });
+    progresoBar.style.width = '90%';
+    const datos = await respuesta.json();
+    if (!respuesta.ok || datos.error) throw new Error(datos.error || 'Error al indexar');
+    progresoBar.style.width = '100%';
+    mostrarMensaje('Catálogo indexado · ' + datos.productos_indexados + ' productos extraídos', 'exito');
+    document.getElementById('proveedor-nombre').value = '';
+    document.getElementById('archivo-pdf').value = '';
+    setTimeout(() => { progreso.style.display = 'none'; progresoBar.style.width = '0%'; }, 2000);
+    cargarProveedores();
+  } catch (err) {
+    mostrarMensaje('Error: ' + err.message, 'error');
+    progreso.style.display = 'none';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Subir e indexar con Claude';
+  }
+}
+
+async function eliminarProveedor(id, nombre) {
+  if (!confirm('¿Eliminar "' + nombre + '" y todos sus productos?')) return;
+  const { error } = await db.from('proveedores').delete().eq('id', id);
+  if (error) { mostrarMensaje('Error: ' + error.message, 'error'); return; }
+  mostrarMensaje('Proveedor eliminado', 'exito');
+  cargarProveedores();
+}
+
+function mostrarMensaje(texto, tipo) {
+  const m = document.getElementById('estado-mensaje');
+  m.className = 'estado-mensaje ' + tipo;
+  m.textContent = texto;
+  if (tipo === 'exito') setTimeout(() => { m.className = 'estado-mensaje'; m.style.display = 'none'; }, 4000);
+}
+
+function escapar(txt) {
+  if (!txt) return '';
+  return String(txt).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&#39;');
+}
+
+function formatearFecha(fecha) {
+  if (!fecha) return '';
+  return new Date(fecha).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+async function inicio() {
+  document.getElementById('overlay-config').style.display = 'flex';
+  if (inicializarCliente()) {
+    const { data: { session } } = await db.auth.getSession();
+    if (session) { usuario = session.user; mostrarApp(); return; }
+    mostrarLogin();
+  }
+}
+
+inicio();
+</script>
+</body>
+</html>
