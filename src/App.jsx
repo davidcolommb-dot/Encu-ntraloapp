@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
-  Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp,
+  Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp, ChevronRight,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
   Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet
 } from "lucide-react";
@@ -82,6 +82,43 @@ function generatePin() {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
+// Hash de contraseña de un solo sentido (SHA-256): nadie, ni el admin, puede
+// "leer" la contraseña original a partir de esto — solo comparar si una
+// contraseña introducida coincide. No es tan robusto como bcrypt/argon2 (no
+// hay "salt" ni ralentización deliberada), pero es muchísimo más seguro que
+// guardar la contraseña tal cual, y no requiere librerías externas.
+async function hashPassword(pw) {
+  const enc = new TextEncoder().encode(pw);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Sesión recordada en este navegador (no en el servidor), para no pedir
+// contraseña de nuevo cada vez que se recarga la página.
+const SESSION_KEY = "mb_session_v1";
+function saveSession(session) {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+  } catch {
+    // almacenamiento no disponible (modo privado, etc.); la sesión simplemente no se recuerda
+  }
+}
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+function clearSession() {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // nada que limpiar
+  }
+}
+
 function normalizeHeader(h) {
   return String(h || "")
     .trim()
@@ -94,7 +131,6 @@ const HEADER_ALIASES = {
   nombre: ["nombre", "name", "empleado", "nombre y apellido", "nombre completo"],
   email: ["email", "correo", "e-mail", "correo electronico", "mail"],
   equipo: ["equipo", "grupo", "team", "departamento", "area"],
-  pin: ["pin", "codigo", "clave"],
 };
 
 function matchColumn(headers, field) {
@@ -105,7 +141,8 @@ function matchColumn(headers, field) {
 
 // Lee un Excel/CSV de empleados y devuelve filas normalizadas + errores de formato.
 // Columnas reconocidas (en cualquier orden, mayúsc./minúsc. y con o sin acentos):
-// Nombre (obligatoria), Email (opcional), Equipo (opcional), PIN (opcional).
+// Nombre (obligatoria), Email (opcional), Equipo (opcional). Las contraseñas no se
+// importan — cada persona crea la suya en su primer acceso.
 async function parseEmployeeExcelFile(file) {
   const buf = await file.arrayBuffer();
   const workbook = XLSX.read(buf, { type: "array" });
@@ -121,7 +158,6 @@ async function parseEmployeeExcelFile(file) {
   }
   const emailIdx = matchColumn(headers, "email");
   const equipoIdx = matchColumn(headers, "equipo");
-  const pinIdx = matchColumn(headers, "pin");
 
   const parsed = [];
   for (let i = 1; i < rows.length; i++) {
@@ -130,10 +166,7 @@ async function parseEmployeeExcelFile(file) {
     if (!name) continue;
     const email = emailIdx !== -1 ? String(row[emailIdx] || "").trim() : "";
     const equipo = equipoIdx !== -1 ? String(row[equipoIdx] || "").trim() : "";
-    let pin = pinIdx !== -1 ? String(row[pinIdx] || "").trim().replace(/\D/g, "").slice(0, 4) : "";
-    const pinProvided = pin.length === 4;
-    if (!pinProvided) pin = generatePin();
-    parsed.push({ name, email, equipo, pin, pinProvided });
+    parsed.push({ name, email, equipo });
   }
   return { rows: parsed, error: null };
 }
@@ -487,29 +520,57 @@ const SEED_NEWS = [
   },
 ];
 
+// Aviso visible de errores de guardado: la app se suscribe a esto para mostrar
+// un banner cuando Supabase rechaza una lectura/escritura, en vez de fallar en
+// silencio (que es lo que ocultaba el problema real de que algunos guardados
+// no llegaban a persistir).
+let globalStorageErrorHandler = null;
+function setGlobalStorageErrorHandler(fn) {
+  globalStorageErrorHandler = fn;
+}
+function reportStorageError(action, key, err) {
+  const msg = (err && (err.message || err.hint || err.details)) || String(err);
+  console.error(`[Supabase] Fallo al ${action} "${key}": ${msg}`);
+  if (globalStorageErrorHandler) globalStorageErrorHandler(`No se pudo ${action} "${key}". Detalle: ${msg}`);
+}
+
 async function loadKey(key, fallback) {
   try {
     const { data, error } = await supabase.from("app_storage").select("value").eq("key", key).maybeSingle();
-    if (error || !data) return fallback;
+    if (error) {
+      reportStorageError("leer", key, error);
+      return fallback;
+    }
+    if (!data) return fallback;
     return data.value;
-  } catch {
+  } catch (err) {
+    reportStorageError("leer", key, err);
     return fallback;
   }
 }
 
 async function saveKey(key, value) {
   try {
-    await supabase.from("app_storage").upsert({ key, value, updated_at: new Date().toISOString() });
-  } catch {
-    // se ignora en silencio; el estado local sigue reflejando la sesión actual
+    const { error } = await supabase
+      .from("app_storage")
+      .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    if (error) {
+      reportStorageError("guardar", key, error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    reportStorageError("guardar", key, err);
+    return false;
   }
 }
 
 async function deleteKey(key) {
   try {
-    await supabase.from("app_storage").delete().eq("key", key);
-  } catch {
-    // clave ya inexistente o error de red; no bloquea la operación en curso
+    const { error } = await supabase.from("app_storage").delete().eq("key", key);
+    if (error) reportStorageError("borrar", key, error);
+  } catch (err) {
+    reportStorageError("borrar", key, err);
   }
 }
 
@@ -775,61 +836,120 @@ function AttachmentViewer({ att }) {
 
 /* ---------- Pantalla de acceso ---------- */
 
-function LoginGate({ employees, adminPin, onEmployeeLogin, onAdminLogin, onAdminSetup }) {
-  const [mode, setMode] = useState("menu"); // menu | employee-pin | admin-pin | admin-setup
+function TextField({ label, value, onChange, type = "text", placeholder, onEnter, autoFocus }) {
+  return (
+    <label className="block text-xs font-semibold text-gray-500 mb-1">
+      {label}
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && onEnter && onEnter()}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        className="mt-1 w-full text-sm rounded-lg border px-3 py-2.5 font-normal text-gray-900"
+        style={{ borderColor: "#00000020" }}
+      />
+    </label>
+  );
+}
+
+function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCreatePassword, onAdminLogin, onAdminSetup }) {
+  // menu | employee-password | employee-verify-email | employee-create-password | admin-password | admin-create-password
+  const [mode, setMode] = useState("menu");
   const [typedName, setTypedName] = useState("");
+  const [password, setPassword] = useState("");
+  const [emailCheck, setEmailCheck] = useState("");
+  const [newPass1, setNewPass1] = useState("");
+  const [newPass2, setNewPass2] = useState("");
   const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  const [setupPin, setSetupPin] = useState("");
-  const [setupStep, setSetupStep] = useState(1);
+  const [busy, setBusy] = useState(false);
 
   function normalize(s) {
     return s.trim().replace(/\s+/g, " ").toLowerCase();
   }
 
-  function goToPin() {
+  function findMatch() {
+    const target = normalize(typedName);
+    return employees.find((e) => normalize(e.name) === target);
+  }
+
+  function goToPassword() {
     if (!typedName.trim()) return;
     setError("");
-    setMode("employee-pin");
+    setPassword("");
+    const match = findMatch();
+    if (match && !match.passwordHash) {
+      setMode("employee-verify-email");
+    } else {
+      setMode("employee-password");
+    }
   }
 
-  function tryEmployeePin(pin) {
-    const target = normalize(typedName);
-    const match = employees.find((e) => normalize(e.name) === target);
-    // Mensaje siempre igual, exista o no exista ese nombre — así la pantalla de
-    // acceso no confirma ni descarta quién está registrado en la app.
-    if (match && match.pin && pin === match.pin) {
+  async function submitEmployeePassword() {
+    setBusy(true);
+    const match = findMatch();
+    const hash = await hashPassword(password);
+    if (match && match.passwordHash && hash === match.passwordHash) {
       onEmployeeLogin(match.name);
     } else {
-      setError("Nombre o PIN incorrecto.");
-      setAttempt((a) => a + 1);
+      setError("Nombre o contraseña incorrectos.");
+    }
+    setBusy(false);
+  }
+
+  function submitEmailCheck() {
+    const match = findMatch();
+    if (match && match.email && normalize(match.email) === normalize(emailCheck)) {
+      setError("");
+      setMode("employee-create-password");
+    } else {
+      setError("Ese email no coincide con el registrado para ese nombre. Consulta con tu administrador.");
     }
   }
 
-  function tryAdminPin(pin) {
-    if (pin === adminPin) {
+  async function submitCreatePassword() {
+    if (newPass1.length < 6) {
+      setError("La contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
+    if (newPass1 !== newPass2) {
+      setError("Las dos contraseñas no coinciden.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const hash = await hashPassword(newPass1);
+    const match = findMatch();
+    await onEmployeeCreatePassword(match.name, hash);
+    setBusy(false);
+  }
+
+  async function submitAdminPassword() {
+    setBusy(true);
+    const hash = await hashPassword(password);
+    if (hash === adminPasswordHash) {
       onAdminLogin();
     } else {
-      setError("PIN de administrador incorrecto.");
-      setAttempt((a) => a + 1);
+      setError("Contraseña de administrador incorrecta.");
     }
+    setBusy(false);
   }
 
-  function handleSetupDigits(pin) {
-    if (setupStep === 1) {
-      setSetupPin(pin);
-      setSetupStep(2);
-      setAttempt((a) => a + 1);
-    } else {
-      if (pin === setupPin) {
-        onAdminSetup(pin);
-      } else {
-        setError("Los PIN no coinciden. Empieza de nuevo.");
-        setSetupStep(1);
-        setSetupPin("");
-        setAttempt((a) => a + 1);
-      }
+  async function submitAdminCreate() {
+    if (newPass1.length < 6) {
+      setError("La contraseña debe tener al menos 6 caracteres.");
+      return;
     }
+    if (newPass1 !== newPass2) {
+      setError("Las dos contraseñas no coinciden.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const hash = await hashPassword(newPass1);
+    await onAdminSetup(hash);
+    setBusy(false);
   }
 
   return (
@@ -843,7 +963,7 @@ function LoginGate({ employees, adminPin, onEmployeeLogin, onAdminLogin, onAdmin
           <div className="font-bold text-lg" style={{ color: BRAND.ink }}>
             Aula Virtual
           </div>
-          <div className="text-xs text-gray-400">Acceso con nombre y PIN personal</div>
+          <div className="text-xs text-gray-400">Acceso con nombre y contraseña</div>
         </div>
 
         {mode === "menu" && (
@@ -854,21 +974,10 @@ function LoginGate({ employees, adminPin, onEmployeeLogin, onAdminLogin, onAdmin
               </div>
             ) : (
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">
-                  Nombre y apellido
-                  <input
-                    value={typedName}
-                    onChange={(e) => setTypedName(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && goToPin()}
-                    placeholder="Como está registrado en el equipo"
-                    className="mt-1 w-full text-sm rounded-lg border px-3 py-2.5 font-normal text-gray-900"
-                    style={{ borderColor: "#00000020" }}
-                    autoFocus
-                  />
-                </label>
+                <TextField label="Nombre y apellido" value={typedName} onChange={setTypedName} placeholder="Como está registrado en el equipo" onEnter={goToPassword} autoFocus />
                 <button
                   disabled={!typedName.trim()}
-                  onClick={goToPin}
+                  onClick={goToPassword}
                   className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40 transition-all duration-150 active:scale-[0.98]"
                   style={{ backgroundColor: BRAND.red }}
                 >
@@ -886,9 +995,10 @@ function LoginGate({ employees, adminPin, onEmployeeLogin, onAdminLogin, onAdmin
             <button
               onClick={() => {
                 setError("");
-                setSetupStep(1);
-                setSetupPin("");
-                setMode(adminPin ? "admin-pin" : "admin-setup");
+                setPassword("");
+                setNewPass1("");
+                setNewPass2("");
+                setMode(adminPasswordHash ? "admin-password" : "admin-create-password");
               }}
               className="w-full flex items-center justify-center gap-2 text-sm font-semibold rounded-lg py-2.5 border transition hover:bg-gray-50"
               style={{ borderColor: "#00000018", color: BRAND.red }}
@@ -898,57 +1008,124 @@ function LoginGate({ employees, adminPin, onEmployeeLogin, onAdminLogin, onAdmin
           </div>
         )}
 
-        {mode === "employee-pin" && (
+        {mode === "employee-password" && (
           <div>
-            <button
-              onClick={() => {
-                setMode("menu");
-                setError("");
-              }}
-              className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-3"
-            >
+            <button onClick={() => { setMode("menu"); setError(""); }} className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-3">
               <ChevronLeft size={14} /> Volver
             </button>
-            <div className="flex flex-col items-center mb-2">
+            <div className="flex flex-col items-center mb-3">
               <Avatar name={typedName} size={52} />
               <div className="font-semibold text-sm mt-2">{typedName}</div>
-              <div className="text-[11px] text-gray-400">Introduce tu PIN de 4 dígitos</div>
             </div>
-            <PinPad key={attempt} onComplete={tryEmployeePin} />
+            <TextField label="Contraseña" type="password" value={password} onChange={setPassword} onEnter={submitEmployeePassword} autoFocus placeholder="Tu contraseña" />
+            <button
+              disabled={!password || busy}
+              onClick={submitEmployeePassword}
+              className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
+              style={{ backgroundColor: BRAND.red }}
+            >
+              {busy ? "Comprobando..." : "Entrar"}
+            </button>
             {error && <div className="text-xs text-red-600 text-center mt-2 font-medium">{error}</div>}
           </div>
         )}
 
-        {mode === "admin-pin" && (
+        {mode === "employee-verify-email" && (
           <div>
-            <button onClick={() => setMode("menu")} className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-3">
+            <button onClick={() => { setMode("menu"); setError(""); }} className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-3">
               <ChevronLeft size={14} /> Volver
             </button>
-            <div className="flex flex-col items-center mb-2">
+            <div className="flex flex-col items-center mb-3 text-center">
+              <Avatar name={typedName} size={52} />
+              <div className="font-semibold text-sm mt-2">{typedName}</div>
+              <div className="text-[11px] text-gray-400">Primer acceso — confirma tu email registrado para crear tu contraseña</div>
+            </div>
+            <TextField label="Tu email" type="email" value={emailCheck} onChange={setEmailCheck} onEnter={submitEmailCheck} autoFocus placeholder="nombre@munozbosch.com" />
+            <button
+              disabled={!emailCheck}
+              onClick={submitEmailCheck}
+              className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
+              style={{ backgroundColor: BRAND.red }}
+            >
+              Continuar
+            </button>
+            {error && <div className="text-xs text-red-600 text-center mt-2 font-medium">{error}</div>}
+          </div>
+        )}
+
+        {mode === "employee-create-password" && (
+          <div>
+            <div className="flex flex-col items-center mb-3 text-center">
+              <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: `${BRAND.gold}20` }}>
+                <KeyRound size={20} style={{ color: BRAND.gold }} />
+              </div>
+              <div className="font-semibold text-sm mt-2">Crea tu contraseña</div>
+              <div className="text-[11px] text-gray-400">Mínimo 6 caracteres. Que no sea una que uses en otro sitio importante.</div>
+            </div>
+            <TextField label="Nueva contraseña" type="password" value={newPass1} onChange={setNewPass1} placeholder="Mínimo 6 caracteres" />
+            <div className="mt-2">
+              <TextField label="Repítela" type="password" value={newPass2} onChange={setNewPass2} onEnter={submitCreatePassword} placeholder="Repite la contraseña" />
+            </div>
+            <button
+              disabled={!newPass1 || !newPass2 || busy}
+              onClick={submitCreatePassword}
+              className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
+              style={{ backgroundColor: BRAND.red }}
+            >
+              {busy ? "Creando..." : "Crear contraseña y entrar"}
+            </button>
+            {error && <div className="text-xs text-red-600 text-center mt-2 font-medium">{error}</div>}
+          </div>
+        )}
+
+        {mode === "admin-password" && (
+          <div>
+            <button onClick={() => { setMode("menu"); setError(""); }} className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-3">
+              <ChevronLeft size={14} /> Volver
+            </button>
+            <div className="flex flex-col items-center mb-3">
               <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: `${BRAND.red}15` }}>
                 <Lock size={20} style={{ color: BRAND.red }} />
               </div>
               <div className="font-semibold text-sm mt-2">Acceso administrador</div>
-              <div className="text-[11px] text-gray-400">Introduce el PIN de administración</div>
             </div>
-            <PinPad key={attempt} onComplete={tryAdminPin} />
+            <TextField label="Contraseña de administrador" type="password" value={password} onChange={setPassword} onEnter={submitAdminPassword} autoFocus placeholder="Contraseña" />
+            <button
+              disabled={!password || busy}
+              onClick={submitAdminPassword}
+              className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
+              style={{ backgroundColor: BRAND.red }}
+            >
+              {busy ? "Comprobando..." : "Entrar"}
+            </button>
             {error && <div className="text-xs text-red-600 text-center mt-2 font-medium">{error}</div>}
           </div>
         )}
 
-        {mode === "admin-setup" && (
+        {mode === "admin-create-password" && (
           <div>
-            <button onClick={() => setMode("menu")} className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-3">
+            <button onClick={() => { setMode("menu"); setError(""); }} className="flex items-center gap-1 text-xs font-semibold text-gray-400 mb-3">
               <ChevronLeft size={14} /> Volver
             </button>
-            <div className="flex flex-col items-center mb-2">
+            <div className="flex flex-col items-center mb-3 text-center">
               <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: `${BRAND.gold}20` }}>
                 <KeyRound size={20} style={{ color: BRAND.gold }} />
               </div>
-              <div className="font-semibold text-sm mt-2">{setupStep === 1 ? "Crea el PIN de administrador" : "Repite el PIN para confirmar"}</div>
-              <div className="text-[11px] text-gray-400">Primer acceso — este PIN protegerá el panel de administración</div>
+              <div className="font-semibold text-sm mt-2">Crea el acceso de administrador</div>
+              <div className="text-[11px] text-gray-400">Primer acceso — mínimo 6 caracteres</div>
             </div>
-            <PinPad key={attempt} onComplete={handleSetupDigits} />
+            <TextField label="Contraseña" type="password" value={newPass1} onChange={setNewPass1} placeholder="Mínimo 6 caracteres" />
+            <div className="mt-2">
+              <TextField label="Repítela" type="password" value={newPass2} onChange={setNewPass2} onEnter={submitAdminCreate} placeholder="Repite la contraseña" />
+            </div>
+            <button
+              disabled={!newPass1 || !newPass2 || busy}
+              onClick={submitAdminCreate}
+              className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
+              style={{ backgroundColor: BRAND.red }}
+            >
+              {busy ? "Creando..." : "Crear y entrar"}
+            </button>
             {error && <div className="text-xs text-red-600 text-center mt-2 font-medium">{error}</div>}
           </div>
         )}
@@ -961,12 +1138,13 @@ function LoginGate({ employees, adminPin, onEmployeeLogin, onAdminLogin, onAdmin
 
 export default function AulaVirtualMB() {
   const [loading, setLoading] = useState(true);
+  const [storageError, setStorageError] = useState("");
   const [courses, setCourses] = useState([]);
   const [news, setNews] = useState([]);
   const [completionsByCourse, setCompletionsByCourse] = useState({});
   const [employees, setEmployees] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [adminPin, setAdminPin] = useState("");
+  const [adminPasswordHash, setAdminPasswordHash] = useState("");
   const [lastBackupAt, setLastBackupAt] = useState(null);
   const [sheetsUrl, setSheetsUrl] = useState("");
   const [loadingTracking, setLoadingTracking] = useState(false);
@@ -974,13 +1152,19 @@ export default function AulaVirtualMB() {
   const [currentUser, setCurrentUser] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
   const [view, setView] = useState("dashboard");
+  const [selectedCatalogCategory, setSelectedCatalogCategory] = useState(null);
   const [activeCourseId, setActiveCourseId] = useState(null);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
 
   useEffect(() => {
+    setGlobalStorageErrorHandler((msg) => setStorageError(msg));
+    return () => setGlobalStorageErrorHandler(null);
+  }, []);
+
+  useEffect(() => {
     (async () => {
-      const [c, n, emp, grp, pin, lastBk, sUrl] = await Promise.all([
+      const [c, n, emp, grp, pwHash, lastBk, sUrl] = await Promise.all([
         loadKey("mb_courses", null),
         loadKey("mb_news", null),
         loadKey("mb_employees", []),
@@ -999,15 +1183,39 @@ export default function AulaVirtualMB() {
         finalNews = SEED_NEWS;
         saveKey("mb_news", finalNews);
       }
-      // migración: empleados antiguos guardados como strings, o sin email -> objetos {name, pin, email}
-      const normalizedEmployees = (emp || []).map((e) => (typeof e === "string" ? { name: e, pin: "", email: "" } : { email: "", ...e }));
+      // migración: empleados antiguos guardados como strings, o con "pin" (sistema anterior) ->
+      // objetos {name, passwordHash, email}. Un "pin" antiguo no se puede convertir en hash
+      // (no sabemos el valor original una vez creado), así que esas personas simplemente
+      // crean su contraseña de nuevo la próxima vez, verificando su email.
+      const normalizedEmployees = (emp || []).map((e) => {
+        if (typeof e === "string") return { name: e, passwordHash: null, email: "" };
+        const { pin, pinProvided, ...rest } = e;
+        return { email: "", passwordHash: null, ...rest };
+      });
       setCourses(finalCourses);
       setNews(finalNews);
       setEmployees(normalizedEmployees);
       setGroups(grp || []);
-      setAdminPin(pin);
+      setAdminPasswordHash(pwHash);
       setLastBackupAt(lastBk);
       setSheetsUrl(sUrl || "");
+
+      // Sesión recordada en este navegador: si hay una guardada y sigue siendo válida,
+      // entra directamente sin volver a pedir nombre/contraseña.
+      const session = loadSession();
+      if (session?.type === "admin") {
+        setIsAdmin(true);
+      } else if (session?.type === "employee") {
+        const stillExists = normalizedEmployees.some((e) => e.name === session.name);
+        if (stillExists) {
+          setCurrentUser(session.name);
+          const assignedIds = finalCourses.filter((c2) => isAssignedToUser(c2, session.name, grp || [])).map((c2) => c2.id);
+          ensureCompletionsForCourses(assignedIds);
+        } else {
+          clearSession();
+        }
+      }
+
       setLoading(false);
     })();
   }, []);
@@ -1199,7 +1407,7 @@ export default function AulaVirtualMB() {
       const rec = await loadKey(`mb_completions_course_${c.id}`, null);
       if (rec) allCompletions[c.id] = rec;
     }
-    const payload = { exportedAt: new Date().toISOString(), courses, news, employees, groups, completionsByCourse: allCompletions, adminPin };
+    const payload = { exportedAt: new Date().toISOString(), courses, news, employees, groups, completionsByCourse: allCompletions, adminPasswordHash };
     if (includeAttachments) {
       const attachmentsData = {};
       for (const c of courses) {
@@ -1259,9 +1467,12 @@ export default function AulaVirtualMB() {
       }
       setCompletionsByCourse(grouped);
     }
-    if (payload.adminPin) {
-      setAdminPin(payload.adminPin);
-      await saveKey("mb_admin_pin", payload.adminPin);
+    if (payload.adminPasswordHash) {
+      setAdminPasswordHash(payload.adminPasswordHash);
+      await saveKey("mb_admin_pin", payload.adminPasswordHash);
+    } else if (payload.adminPin) {
+      // compatibilidad con copias muy antiguas (sistema de PIN previo) — ya no es
+      // un hash válido para el nuevo sistema, así que no se restaura tal cual.
     }
     if (payload.attachmentsData) {
       for (const [key, val] of Object.entries(payload.attachmentsData)) {
@@ -1270,9 +1481,9 @@ export default function AulaVirtualMB() {
     }
   }
 
-  async function addEmployee(name, pin, email) {
+  async function addEmployee(name, email) {
     if (!name.trim() || employees.some((e) => e.name === name.trim())) return;
-    const updated = [...employees, { name: name.trim(), pin, email: email.trim() }];
+    const updated = [...employees, { name: name.trim(), passwordHash: null, email: email.trim() }];
     setEmployees(updated);
     saveKey("mb_employees", updated);
   }
@@ -1282,10 +1493,22 @@ export default function AulaVirtualMB() {
     saveKey("mb_employees", updated);
     if (currentUser === name) setCurrentUser("");
   }
-  async function updateEmployeePin(name, pin) {
-    const updated = employees.map((e) => (e.name === name ? { ...e, pin } : e));
+  // Borra la contraseña de alguien (no se puede "ver", solo restablecer) — la
+  // próxima vez que esa persona entre, tendrá que crear una contraseña nueva
+  // verificando su email, igual que la primera vez.
+  async function resetEmployeePassword(name) {
+    const updated = employees.map((e) => (e.name === name ? { ...e, passwordHash: null } : e));
     setEmployees(updated);
     saveKey("mb_employees", updated);
+  }
+  async function createEmployeePassword(name, passwordHash) {
+    const updated = employees.map((e) => (e.name === name ? { ...e, passwordHash } : e));
+    setEmployees(updated);
+    await saveKey("mb_employees", updated);
+    setCurrentUser(name);
+    saveSession({ type: "employee", name });
+    const assignedIds = courses.filter((c) => isAssignedToUser(c, name, groups)).map((c) => c.id);
+    ensureCompletionsForCourses(assignedIds);
   }
   async function updateEmployeeEmail(name, email) {
     const updated = employees.map((e) => (e.name === name ? { ...e, email } : e));
@@ -1293,10 +1516,10 @@ export default function AulaVirtualMB() {
     saveKey("mb_employees", updated);
   }
 
-  // Importación masiva desde Excel/CSV. Empleados nuevos se crean; empleados que
-  // ya existían (mismo nombre) actualizan su email, y su PIN solo si el archivo
-  // traía uno explícito para esa fila (para no invalidar el acceso de alguien
-  // sin querer). Los equipos se crean como grupos si no existían todavía.
+  // Importación masiva desde Excel/CSV. Empleados nuevos se crean sin contraseña
+  // (la crean ellos mismos en su primer acceso, verificando su email). Empleados
+  // que ya existían (mismo nombre) solo actualizan su email. Los equipos se crean
+  // como grupos si no existían todavía.
   async function importEmployeesBulk(rows) {
     let updatedEmployees = [...employees];
     let updatedGroups = [...groups];
@@ -1304,12 +1527,11 @@ export default function AulaVirtualMB() {
     for (const row of rows) {
       const existingIdx = updatedEmployees.findIndex((e) => e.name.trim().toLowerCase() === row.name.trim().toLowerCase());
       if (existingIdx === -1) {
-        updatedEmployees.push({ name: row.name, pin: row.pin, email: row.email || "" });
+        updatedEmployees.push({ name: row.name, passwordHash: null, email: row.email || "" });
       } else {
         updatedEmployees[existingIdx] = {
           ...updatedEmployees[existingIdx],
           email: row.email || updatedEmployees[existingIdx].email,
-          pin: row.pinProvided ? row.pin : updatedEmployees[existingIdx].pin,
         };
       }
 
@@ -1396,20 +1618,23 @@ export default function AulaVirtualMB() {
     return refreshedSeedCourses.length + refreshedNews.length;
   }
 
-  async function handleAdminSetup(pin) {
-    setAdminPin(pin);
-    await saveKey("mb_admin_pin", pin);
+  async function handleAdminSetup(hash) {
+    setAdminPasswordHash(hash);
+    await saveKey("mb_admin_pin", hash);
     setIsAdmin(true);
     setView("admin");
+    saveSession({ type: "admin" });
   }
 
   function logout() {
     setCurrentUser("");
     setView("dashboard");
+    clearSession();
   }
   function logoutAdmin() {
     setIsAdmin(false);
     if (view === "admin") setView("dashboard");
+    clearSession();
   }
 
   if (loading) {
@@ -1424,16 +1649,19 @@ export default function AulaVirtualMB() {
     return (
       <LoginGate
         employees={employees}
-        adminPin={adminPin}
+        adminPasswordHash={adminPasswordHash}
         onEmployeeLogin={(name) => {
           setCurrentUser(name);
           setView("dashboard");
+          saveSession({ type: "employee", name });
           const assignedIds = courses.filter((c) => isAssignedToUser(c, name, groups)).map((c) => c.id);
           ensureCompletionsForCourses(assignedIds);
         }}
+        onEmployeeCreatePassword={createEmployeePassword}
         onAdminLogin={() => {
           setIsAdmin(true);
           setView("admin");
+          saveSession({ type: "admin" });
         }}
         onAdminSetup={handleAdminSetup}
       />
@@ -1507,7 +1735,10 @@ export default function AulaVirtualMB() {
           ].map((t) => (
             <button
               key={t.id}
-              onClick={() => setView(t.id)}
+              onClick={() => {
+                if (t.id === "catalog" && view !== "course") setSelectedCatalogCategory(null);
+                setView(t.id);
+              }}
               className="flex items-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-t-md transition-all duration-200"
               style={{
                 backgroundColor: view === t.id || (view === "course" && t.id === "catalog") ? BRAND.cream : "transparent",
@@ -1522,6 +1753,26 @@ export default function AulaVirtualMB() {
       </div>
 
       <div className="max-w-5xl mx-auto px-4 py-6">
+        {storageError && (
+          <div
+            className="mb-5 rounded-lg border px-4 py-3 text-sm flex items-start gap-2 justify-between"
+            style={{ borderColor: "#EF444455", backgroundColor: "#FEE2E2", color: "#991B1B" }}
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="font-semibold">No se ha podido guardar correctamente.</div>
+                <div className="text-xs mt-0.5 opacity-90">{storageError}</div>
+                <div className="text-xs mt-1 opacity-90">
+                  Es probable que sea un permiso de Supabase (revisa las políticas de la tabla app_storage) o de conexión. Tu cambio puede no haberse guardado — repítelo cuando esté resuelto.
+                </div>
+              </div>
+            </div>
+            <button onClick={() => setStorageError("")} className="flex-shrink-0" style={{ color: "#991B1B" }}>
+              <X size={16} />
+            </button>
+          </div>
+        )}
         {view === "dashboard" && (
           <Dashboard
             currentUser={currentUser}
@@ -1536,7 +1787,17 @@ export default function AulaVirtualMB() {
             onOpenCourse={openCourse}
           />
         )}
-        {view === "catalog" && <Catalog courses={courses} currentUser={currentUser} groups={groups} getStatus={getStatus} onOpenCourse={openCourse} />}
+        {view === "catalog" && (
+          <Catalog
+            courses={courses}
+            currentUser={currentUser}
+            groups={groups}
+            getStatus={getStatus}
+            onOpenCourse={openCourse}
+            selectedCategory={selectedCatalogCategory}
+            onSelectCategory={setSelectedCatalogCategory}
+          />
+        )}
         {view === "course" && activeCourse && (
           <CourseDetail
             course={activeCourse}
@@ -1573,7 +1834,7 @@ export default function AulaVirtualMB() {
             onDeleteNews={deleteNews}
             onAddEmployee={addEmployee}
             onRemoveEmployee={removeEmployee}
-            onUpdateEmployeePin={updateEmployeePin}
+            onResetEmployeePassword={resetEmployeePassword}
             onUpdateEmployeeEmail={updateEmployeeEmail}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
@@ -1772,6 +2033,17 @@ function Dashboard({ currentUser, news, pendingForUser, completedForUser, assign
   );
 }
 
+function shadeColor(hex, percent) {
+  const num = parseInt(hex.replace("#", ""), 16);
+  let r = (num >> 16) + Math.round(255 * percent);
+  let g = ((num >> 8) & 0x00ff) + Math.round(255 * percent);
+  let b = (num & 0x0000ff) + Math.round(255 * percent);
+  r = Math.max(Math.min(255, r), 0);
+  g = Math.max(Math.min(255, g), 0);
+  b = Math.max(Math.min(255, b), 0);
+  return "#" + (0x1000000 + r * 0x10000 + g * 0x100 + b).toString(16).slice(1);
+}
+
 function sortByUrgency(list) {
   return [...list].sort((a, b) => {
     const da = a.deadline ? daysUntil(a.deadline) : 9999;
@@ -1780,7 +2052,50 @@ function sortByUrgency(list) {
   });
 }
 
-function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse }) {
+function CategoryBubble({ cat, onClick }) {
+  const Icon = cat.icon;
+  return (
+    <button
+      onClick={onClick}
+      className="group relative overflow-hidden rounded-3xl flex flex-col items-center justify-center gap-3 shadow-md hover:shadow-2xl transition-all duration-300 hover:-translate-y-1.5 active:scale-[0.98]"
+      style={{ background: `linear-gradient(145deg, ${shadeColor(cat.color, 0.08)}, ${shadeColor(cat.color, -0.18)})`, minHeight: 190, padding: 24 }}
+    >
+      <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-white opacity-10 pointer-events-none" />
+      <div className="absolute -bottom-10 -left-6 w-28 h-28 rounded-full bg-white opacity-10 pointer-events-none" />
+      <div
+        className="absolute top-3 left-3 flex items-center justify-center rounded-full font-extrabold text-white text-[11px]"
+        style={{ backgroundColor: "rgba(255,255,255,0.22)", width: 30, height: 30 }}
+      >
+        {cat.code}
+      </div>
+      <div className="w-20 h-20 rounded-full flex items-center justify-center" style={{ backgroundColor: "rgba(255,255,255,0.22)" }}>
+        <Icon size={34} className="text-white" strokeWidth={1.75} />
+      </div>
+      <div className="text-white font-extrabold text-lg text-center leading-tight px-2">{cat.label}</div>
+      <ChevronRight size={16} className="text-white opacity-0 group-hover:opacity-80 transition-opacity absolute bottom-3 right-3" />
+    </button>
+  );
+}
+
+function CategoryPicker({ onSelectCategory }) {
+  return (
+    <div>
+      <div className="text-center mb-6">
+        <h2 className="font-extrabold text-xl" style={{ color: BRAND.ink }}>
+          ¿Qué quieres ver?
+        </h2>
+        <div className="text-sm text-gray-400 mt-1">Elige un campo para entrar en sus formaciones</div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+        {CATEGORIES.map((cat) => (
+          <CategoryBubble key={cat.id} cat={cat} onClick={() => onSelectCategory(cat.id)} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses;
 
@@ -1797,34 +2112,44 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse }) {
     );
   }
 
-  const pendingCourses = visibleCourses.filter((c) => !currentUser || getStatus(currentUser, c.id) !== "completada");
-  const completedCourses = currentUser ? visibleCourses.filter((c) => getStatus(currentUser, c.id) === "completada") : [];
+  if (!selectedCategory) {
+    return <CategoryPicker onSelectCategory={onSelectCategory} />;
+  }
+
+  const cat = categoryMeta(selectedCategory);
+  const categoryCourses = visibleCourses.filter((c) => c.category === selectedCategory);
+  const pendingCourses = sortByUrgency(categoryCourses.filter((c) => !currentUser || getStatus(currentUser, c.id) !== "completada"));
+  const completedCourses = currentUser ? categoryCourses.filter((c) => getStatus(currentUser, c.id) === "completada") : [];
+  const CatIcon = cat.icon;
 
   return (
-    <div className="space-y-8">
-      {CATEGORIES.map((cat) => {
-        const items = sortByUrgency(pendingCourses.filter((c) => c.category === cat.id));
-        if (items.length === 0) return null;
-        return (
-          <div key={cat.id}>
-            <div className="flex items-center gap-2 mb-3">
-              <span className="inline-flex items-center justify-center rounded-md font-bold text-white text-xs" style={{ backgroundColor: cat.color, width: 24, height: 24 }}>
-                {cat.code}
-              </span>
-              <h2 className="font-bold text-base">{cat.label}</h2>
-              <span className="text-[11px] text-gray-400 font-normal">— por plazo más urgente primero</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {items.map((c) => (
-                <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} />
-              ))}
-            </div>
-          </div>
-        );
-      })}
+    <div className="space-y-6">
+      <button onClick={() => onSelectCategory(null)} className="flex items-center gap-1 text-sm font-semibold" style={{ color: BRAND.red }}>
+        <ChevronLeft size={16} /> Volver a los campos
+      </button>
 
-      {pendingCourses.length === 0 && completedCourses.length > 0 && (
-        <div className="text-sm text-gray-400 text-center py-2">No tienes formaciones pendientes en el catálogo. Al día.</div>
+      <div className="flex items-center gap-3">
+        <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: cat.color }}>
+          <CatIcon size={22} className="text-white" />
+        </div>
+        <div>
+          <h2 className="font-extrabold text-xl leading-tight" style={{ color: BRAND.ink }}>
+            {cat.label}
+          </h2>
+          <div className="text-xs text-gray-400">Pendientes por plazo más urgente primero</div>
+        </div>
+      </div>
+
+      {pendingCourses.length === 0 ? (
+        <div className="text-sm text-gray-400 py-4">
+          {completedCourses.length > 0 ? "No tienes formaciones pendientes en este campo. Al día." : "Todavía no hay formaciones en este campo."}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {pendingCourses.map((c) => (
+            <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} />
+          ))}
+        </div>
       )}
 
       {currentUser && completedCourses.length > 0 && (
@@ -1848,6 +2173,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse }) {
     </div>
   );
 }
+
 
 function CourseDetail({ course, currentUser, status, record, quizAnswers, setQuizAnswers, quizResult, onSubmitQuiz, onSelfReport, onBack, onRetry }) {
   const embed = getVideoEmbedUrl(course.videoUrl);
@@ -2060,7 +2386,7 @@ function AdminPanel({
   onDeleteNews,
   onAddEmployee,
   onRemoveEmployee,
-  onUpdateEmployeePin,
+  onResetEmployeePassword,
   onUpdateEmployeeEmail,
   onImportEmployeesBulk,
   onAddGroup,
@@ -2092,10 +2418,7 @@ function AdminPanel({
   const [fileError, setFileError] = useState("");
   const [saving, setSaving] = useState(false);
   const [newEmployeeName, setNewEmployeeName] = useState("");
-  const [newEmployeePin, setNewEmployeePin] = useState("");
   const [newEmployeeEmail, setNewEmployeeEmail] = useState("");
-  const [editingPinFor, setEditingPinFor] = useState(null);
-  const [editingPinValue, setEditingPinValue] = useState("");
   const [editingEmailFor, setEditingEmailFor] = useState(null);
   const [editingEmailValue, setEditingEmailValue] = useState("");
   const [employeeSearch, setEmployeeSearch] = useState("");
@@ -2596,15 +2919,11 @@ function AdminPanel({
             <div className="flex-1 min-w-[160px]">
               <TextInput label="Email" value={newEmployeeEmail} onChange={setNewEmployeeEmail} placeholder="nombre@munozbosch.com" type="email" />
             </div>
-            <div className="w-28">
-              <TextInput label="PIN (4 dígitos)" value={newEmployeePin} onChange={(v) => setNewEmployeePin(v.replace(/\D/g, "").slice(0, 4))} placeholder="0000" />
-            </div>
             <button
-              disabled={!newEmployeeName.trim() || newEmployeePin.length !== 4}
+              disabled={!newEmployeeName.trim() || !newEmployeeEmail.trim()}
               onClick={() => {
-                onAddEmployee(newEmployeeName, newEmployeePin, newEmployeeEmail);
+                onAddEmployee(newEmployeeName, newEmployeeEmail);
                 setNewEmployeeName("");
-                setNewEmployeePin("");
                 setNewEmployeeEmail("");
               }}
               className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 mb-1"
@@ -2612,6 +2931,9 @@ function AdminPanel({
             >
               Añadir
             </button>
+          </div>
+          <div className="text-[11px] text-gray-400 -mt-2">
+            No hace falta poner contraseña aquí — cada persona crea la suya en su primer acceso, verificando este email.
           </div>
 
           <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
@@ -2621,9 +2943,9 @@ function AdminPanel({
             </div>
             <div className="text-xs text-gray-500 mb-3">
               Sube un archivo .xlsx o .csv con columnas <strong>Nombre</strong> (obligatoria), y opcionalmente{" "}
-              <strong>Email</strong>, <strong>Equipo</strong> y <strong>PIN</strong>. Si no incluyes PIN, se genera uno
-              aleatorio por persona — te lo mostraré al terminar para que lo repartas. Si la columna Equipo nombra un
-              grupo que no existe todavía, se crea solo.
+              <strong>Email</strong> y <strong>Equipo</strong>. No hace falta contraseña — cada persona crea la suya en
+              su primer acceso, verificando el email que pongas aquí. Si la columna Equipo nombra un grupo que no
+              existe todavía, se crea solo.
             </div>
             <input
               type="file"
@@ -2662,7 +2984,6 @@ function AdminPanel({
                         <th className="px-2 py-1.5">Nombre</th>
                         <th className="px-2 py-1.5">Email</th>
                         <th className="px-2 py-1.5">Equipo</th>
-                        <th className="px-2 py-1.5">PIN</th>
                         <th className="px-2 py-1.5">Estado</th>
                       </tr>
                     </thead>
@@ -2674,7 +2995,6 @@ function AdminPanel({
                             <td className="px-2 py-1.5 font-medium">{r.name}</td>
                             <td className="px-2 py-1.5 text-gray-500">{r.email || "—"}</td>
                             <td className="px-2 py-1.5 text-gray-500">{r.equipo || "—"}</td>
-                            <td className="px-2 py-1.5">{r.pin}{!r.pinProvided && <span className="text-gray-400"> (generado)</span>}</td>
                             <td className="px-2 py-1.5">
                               {exists ? (
                                 <span className="text-amber-700 font-semibold">Ya existe — se actualiza</span>
@@ -2718,31 +3038,12 @@ function AdminPanel({
 
             {importDone && (
               <div className="mt-3 rounded-lg p-3" style={{ backgroundColor: "#DCFCE7" }}>
-                <div className="text-sm font-semibold text-green-800 mb-1 flex items-center gap-1.5">
+                <div className="text-sm font-semibold text-green-800 flex items-center gap-1.5">
                   <CheckCircle2 size={14} /> Importación completada — {importDone.length} persona{importDone.length === 1 ? "" : "s"}
                 </div>
-                <div className="text-xs text-green-800 mb-2">
-                  Apunta o descarga los PIN generados para repartirlos — no vuelven a mostrarse aquí.
+                <div className="text-xs text-green-800 mt-1">
+                  Ya pueden entrar con su nombre y crear su contraseña verificando el email que has importado.
                 </div>
-                <button
-                  onClick={() => {
-                    const lines = ["Nombre,Email,Equipo,PIN"];
-                    importDone.forEach((r) => lines.push(`"${r.name}","${r.email}","${r.equipo}","${r.pin}"`));
-                    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `pins-importados-${todayISO()}.csv`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                  }}
-                  className="text-xs font-semibold rounded-md px-3 py-1.5 border"
-                  style={{ borderColor: "#16653480", color: "#166534" }}
-                >
-                  Descargar PIN en CSV
-                </button>
               </div>
             )}
           </div>
@@ -2799,41 +3100,17 @@ function AdminPanel({
                         </button>
                       )}
                     </div>
-                    {!e.pin && <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5 flex-shrink-0">Sin PIN</span>}
+                    {!e.passwordHash && <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5 flex-shrink-0">Sin contraseña todavía</span>}
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {editingPinFor === e.name ? (
-                      <>
-                        <input
-                          value={editingPinValue}
-                          onChange={(ev) => setEditingPinValue(ev.target.value.replace(/\D/g, "").slice(0, 4))}
-                          placeholder="0000"
-                          className="w-16 text-sm rounded-md border px-2 py-1"
-                          style={{ borderColor: "#00000020" }}
-                        />
-                        <button
-                          disabled={editingPinValue.length !== 4}
-                          onClick={() => {
-                            onUpdateEmployeePin(e.name, editingPinValue);
-                            setEditingPinFor(null);
-                            setEditingPinValue("");
-                          }}
-                          className="text-xs font-semibold disabled:opacity-40"
-                          style={{ color: BRAND.blue }}
-                        >
-                          Guardar
-                        </button>
-                      </>
-                    ) : (
+                    {e.passwordHash && (
                       <button
-                        onClick={() => {
-                          setEditingPinFor(e.name);
-                          setEditingPinValue("");
-                        }}
+                        onClick={() => onResetEmployeePassword(e.name)}
                         className="text-xs font-semibold"
                         style={{ color: BRAND.blue }}
+                        title="Borra su contraseña actual; en su próximo acceso deberá crear una nueva verificando su email"
                       >
-                        {e.pin ? "Cambiar PIN" : "Asignar PIN"}
+                        Restablecer contraseña
                       </button>
                     )}
                     <button onClick={() => onRemoveEmployee(e.name)} className="text-red-500">
@@ -3149,7 +3426,7 @@ function AdminPanel({
                 : "Todavía no has exportado ninguna copia de seguridad."}
             </div>
             <div className="text-[11px] text-gray-400 rounded-md p-2.5 mb-3" style={{ backgroundColor: "#00000008" }}>
-              Esto descarga un archivo a tu ordenador con todo lo que hay guardado ahora mismo. Guárdalo en SharePoint, Drive o donde tengáis vuestras copias — cuanto más lejos de este mismo sistema, mejor protegido está. El archivo incluye los PIN de acceso: trátalo como información sensible.
+              Esto descarga un archivo a tu ordenador con todo lo que hay guardado ahora mismo. Guárdalo en SharePoint, Drive o donde tengáis vuestras copias — cuanto más lejos de este mismo sistema, mejor protegido está. El archivo incluye las contraseñas cifradas (hash) de acceso: no son legibles directamente, pero trátalo igualmente como información sensible.
             </div>
             <div className="flex gap-2 flex-wrap">
               <button
