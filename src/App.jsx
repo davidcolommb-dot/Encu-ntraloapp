@@ -729,21 +729,23 @@ function DeadlineChip({ deadline, completed }) {
   );
 }
 
+// Genera un par "píldora" (fondo muy suave + texto oscuro del mismo tono) a partir
+// de cualquier color de marca — así toda la web usa el mismo lenguaje visual de
+// etiquetas sin tener que definir a mano cada combinación fondo/texto.
+function pillColors(hex) {
+  return { bg: shadeColor(hex, 0.86), text: shadeColor(hex, -0.38) };
+}
+
 function CategoryTag({ id, small }) {
   const meta = categoryMeta(id);
   const Icon = meta.icon;
+  const { bg, text } = pillColors(meta.color);
   return (
     <span
-      className={`inline-flex items-center gap-1.5 font-semibold rounded-md ${small ? "text-[11px] px-1.5 py-0.5" : "text-xs px-2 py-1"}`}
-      style={{ backgroundColor: `${meta.color}1A`, color: meta.color }}
+      className={`inline-flex items-center gap-1.5 font-semibold rounded-full ${small ? "text-[11px] px-2.5 py-1" : "text-xs px-3 py-1.5"}`}
+      style={{ backgroundColor: bg, color: text }}
     >
-      <span
-        className="inline-flex items-center justify-center rounded-sm font-bold"
-        style={{ backgroundColor: meta.color, color: "white", width: 18, height: 18, fontSize: 9 }}
-      >
-        {meta.code}
-      </span>
-      <Icon size={13} />
+      <Icon size={small ? 12 : 13} />
       {meta.label}
     </span>
   );
@@ -1359,6 +1361,11 @@ export default function AulaVirtualMB() {
     return courses.filter((c) => isAssignedToUser(c, currentUser, groups) && getStatus(currentUser, c.id) === "completada");
   }, [courses, completionsByCourse, currentUser, groups]);
 
+  // Alertas: solo lo que ya venció, o lo que vence en 3 días o menos.
+  const overdueForUser = useMemo(() => pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) < 0), [pendingForUser]);
+  const dueSoonForUser = useMemo(() => pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) >= 0 && daysUntil(c.deadline) <= 3), [pendingForUser]);
+  const alertCount = overdueForUser.length + dueSoonForUser.length;
+
   const assignedCountForUser = useMemo(() => {
     if (!currentUser) return 0;
     return courses.filter((c) => isAssignedToUser(c, currentUser, groups)).length;
@@ -1743,6 +1750,7 @@ export default function AulaVirtualMB() {
         <div className="max-w-5xl mx-auto px-4 flex gap-1">
           {[
             { id: "dashboard", label: "Inicio", icon: Home },
+            ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
             { id: "catalog", label: "Catálogo", icon: LayoutGrid },
             ...(isAdmin ? [{ id: "admin", label: "Administración", icon: Settings }] : []),
           ].map((t) => (
@@ -1752,7 +1760,7 @@ export default function AulaVirtualMB() {
                 if (t.id === "catalog" && view !== "course") setSelectedCatalogCategory(null);
                 setView(t.id);
               }}
-              className="flex items-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-t-md transition-all duration-200"
+              className="relative flex items-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-t-md transition-all duration-200"
               style={{
                 backgroundColor: view === t.id || (view === "course" && t.id === "catalog") ? BRAND.cream : "transparent",
                 color: view === t.id || (view === "course" && t.id === "catalog") ? BRAND.red : "rgba(255,255,255,0.85)",
@@ -1760,6 +1768,14 @@ export default function AulaVirtualMB() {
             >
               <t.icon size={14} />
               {t.label}
+              {!!t.count && (
+                <span
+                  className="inline-flex items-center justify-center rounded-full text-white font-bold"
+                  style={{ backgroundColor: "#E9312B", fontSize: 10, minWidth: 16, height: 16, padding: "0 4px" }}
+                >
+                  {t.count}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -1798,7 +1814,18 @@ export default function AulaVirtualMB() {
             level={levelForUser}
             badges={badgesForUser}
             onOpenCourse={openCourse}
+            onOpenNewsLink={(item) => {
+              if (item.linkType === "course" && item.linkId) {
+                openCourse(item.linkId);
+              } else if (item.linkType === "category" && item.linkId) {
+                setSelectedCatalogCategory(item.linkId);
+                setView("catalog");
+              }
+            }}
           />
+        )}
+        {view === "alerts" && (
+          <AlertsView overdueForUser={overdueForUser} dueSoonForUser={dueSoonForUser} onOpenCourse={openCourse} />
         )}
         {view === "catalog" && (
           <Catalog
@@ -1912,47 +1939,72 @@ function CourseCard({ course, status, onOpen }) {
   );
 }
 
-function StatusHero({ currentUser, pendingForUser, assignedCountForUser, points, level }) {
+function WelcomeHero({ currentUser, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges }) {
   if (!currentUser) return null;
 
   const overdueCount = pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) < 0).length;
   const allDone = assignedCountForUser > 0 && pendingForUser.length === 0;
   const noneAssigned = assignedCountForUser === 0;
 
-  let icon = Clock, big = "Tienes formaciones pendientes", small = `${pendingForUser.length} por completar.`, bg = "#FEF3C7", fg = "#92400E", ring = "#F59E0B";
+  let icon = Clock,
+    statusLine = `${pendingForUser.length} formación${pendingForUser.length === 1 ? "" : "es"} por completar.`,
+    bg = "#FAEEDA",
+    fg = "#633806",
+    ring = "#C9A227";
   if (noneAssigned) {
-    icon = Home; big = "Todavía no tienes formaciones asignadas"; small = "Cuando te asignen alguna, aparecerá aquí."; bg = "#F3F4F6"; fg = "#4B5563"; ring = "#9CA3AF";
+    icon = Home;
+    statusLine = "Todavía no tienes formaciones asignadas.";
+    bg = "#F1EFE8";
+    fg = "#5F5E5A";
+    ring = "#888780";
   } else if (allDone) {
-    icon = CheckCircle2; big = "Estás al día"; small = "Has completado todas tus formaciones asignadas."; bg = "#DCFCE7"; fg = "#166534"; ring = "#22C55E";
+    icon = CheckCircle2;
+    statusLine = "Estás al día con todo.";
+    bg = "#EAF3DE";
+    fg = "#27500A";
+    ring = "#639922";
   } else if (overdueCount > 0) {
-    icon = AlertTriangle; big = "Tienes formaciones vencidas"; small = `${overdueCount} vencida${overdueCount === 1 ? "" : "s"} de ${pendingForUser.length} pendiente${pendingForUser.length === 1 ? "" : "s"} en total.`; bg = "#FEE2E2"; fg = "#B91C1C"; ring = "#EF4444";
+    icon = AlertTriangle;
+    statusLine = `${overdueCount} vencida${overdueCount === 1 ? "" : "s"} de ${pendingForUser.length} pendiente${pendingForUser.length === 1 ? "" : "s"}.`;
+    bg = "#FCEBEB";
+    fg = "#791F1F";
+    ring = "#E9312B";
   }
   const Icon = icon;
+  const firstName = currentUser.split(" ")[0];
 
   return (
-    <div className="rounded-2xl p-5 flex items-center gap-4 flex-wrap shadow-sm" style={{ backgroundColor: bg }}>
-      <div className="w-14 h-14 rounded-full flex items-center justify-center flex-shrink-0 shadow-md" style={{ backgroundColor: "white" }}>
-        <Icon size={28} style={{ color: ring }} />
-      </div>
-      <div className="flex-1 min-w-[200px]">
-        <div className="font-extrabold text-2xl leading-tight" style={{ color: fg }}>
-          {big}
-        </div>
-        <div className="text-sm mt-0.5" style={{ color: fg, opacity: 0.85 }}>
-          {small}
-        </div>
-      </div>
-      {!noneAssigned && (
-        <div className="flex items-center gap-2 bg-white rounded-xl px-4 py-2 shadow-sm">
-          <Trophy size={20} style={{ color: level.color }} />
+    <div className="rounded-2xl p-6 shadow-sm" style={{ backgroundColor: bg }}>
+      <div className="flex items-center justify-between gap-5 flex-wrap">
+        <div className="flex items-center gap-3.5">
+          <Avatar name={currentUser} size={54} />
           <div>
-            <div className="text-sm font-bold" style={{ color: BRAND.ink }}>
-              {points} pts · Nivel {level.tier} · {level.name}
+            <div className="font-extrabold text-xl leading-tight" style={{ color: fg }}>
+              Hola, {firstName}
             </div>
-            <div className="text-[11px] text-gray-400">
-              {level.nextMin != null ? `${level.nextMin - points} pts para el siguiente nivel` : "Nivel máximo alcanzado"}
+            <div className="text-sm font-medium mt-0.5 flex items-center gap-1.5" style={{ color: fg, opacity: 0.9 }}>
+              <Icon size={14} />
+              {statusLine}
             </div>
           </div>
+        </div>
+        {!noneAssigned && <ProgressRing percent={progressPercent} color={ring} label={`${completedForUser.length}/${assignedCountForUser} formaciones`} />}
+      </div>
+
+      {!noneAssigned && (
+        <div className="flex items-center justify-between gap-4 flex-wrap mt-5 pt-4" style={{ borderTop: `1px solid ${shadeColor(bg, -0.06)}` }}>
+          <div className="flex items-center gap-2 bg-white rounded-xl px-3.5 py-2 shadow-sm">
+            <Trophy size={18} style={{ color: level.color }} />
+            <div>
+              <div className="text-xs font-bold" style={{ color: BRAND.ink }}>
+                {points} pts · Nivel {level.tier} · {level.name}
+              </div>
+              <div className="text-[10px] text-gray-400">
+                {level.nextMin != null ? `${level.nextMin - points} pts para el siguiente nivel` : "Nivel máximo alcanzado"}
+              </div>
+            </div>
+          </div>
+          {badges.length > 0 && <BadgesRow badges={badges} />}
         </div>
       )}
     </div>
@@ -1965,8 +2017,9 @@ function BadgesRow({ badges }) {
     <div className="flex flex-wrap gap-2">
       {badges.map((b) => {
         const Icon = b.icon || Award;
+        const { bg, text } = pillColors(BRAND.gold);
         return (
-          <div key={b.id} className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-sm" style={{ backgroundColor: `${BRAND.gold}18`, color: "#8A6D1A", border: `1px solid ${BRAND.gold}30` }}>
+          <div key={b.id} className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-sm" style={{ backgroundColor: bg, color: text }}>
             <Icon size={13} />
             {b.label}
           </div>
@@ -1976,45 +2029,84 @@ function BadgesRow({ badges }) {
   );
 }
 
-function Dashboard({ currentUser, news, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges, onOpenCourse }) {
-  return (
-    <div className="space-y-8">
-      {currentUser && (
-        <StatusHero currentUser={currentUser} pendingForUser={pendingForUser} assignedCountForUser={assignedCountForUser} points={points} level={level} />
-      )}
+function NewsCard({ item, featured, onOpen }) {
+  const cat = item.linkType === "category" ? categoryMeta(item.linkId) : null;
+  const accentColor = cat ? cat.color : BRAND.teal;
+  const { bg: pillBg, text: pillText } = pillColors(accentColor);
+  const isNew = daysUntil(item.date) != null && Math.abs(daysUntil(item.date)) <= 3 && daysUntil(item.date) <= 0;
+  const clickable = item.linkType === "course" || item.linkType === "category";
+  const Icon = cat ? cat.icon : Newspaper;
 
-      {currentUser && (
-        <div className="rounded-xl bg-white border p-4 flex items-center gap-4 flex-wrap" style={{ borderColor: "#00000012" }}>
-          <Avatar name={currentUser} size={48} />
-          <div className="flex-1 min-w-[160px]">
-            <div className="font-bold text-base">Hola, {currentUser.split(" ")[0]}</div>
-            <div className="text-xs text-gray-500">
-              {completedForUser.length} completada{completedForUser.length === 1 ? "" : "s"} · {pendingForUser.length} pendiente{pendingForUser.length === 1 ? "" : "s"}
-            </div>
-            {badges.length > 0 && (
-              <div className="mt-2">
-                <BadgesRow badges={badges} />
-              </div>
-            )}
-          </div>
-          <ProgressRing percent={progressPercent} color={BRAND.red} label="Progreso total" />
+  return (
+    <div
+      onClick={clickable ? onOpen : undefined}
+      className={`bg-white rounded-2xl shadow-sm p-4 ${featured ? "sm:p-5" : ""} ${clickable ? "cursor-pointer hover:shadow-lg hover:-translate-y-0.5" : ""} transition-all duration-200`}
+      style={{ borderLeft: `5px solid ${accentColor}` }}
+    >
+      <div className="flex items-start justify-between gap-2 flex-wrap mb-2">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {isNew && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ backgroundColor: "#EAF3DE", color: "#27500A" }}>
+              Nuevo
+            </span>
+          )}
+          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: pillBg, color: pillText }}>
+            <Icon size={11} />
+            {cat ? cat.label : "General"}
+          </span>
+        </div>
+        <span className="text-[11px] text-gray-400 flex-shrink-0">{item.date}</span>
+      </div>
+      <div className={`font-bold leading-snug ${featured ? "text-base" : "text-sm"}`} style={{ color: BRAND.ink }}>
+        {item.title}
+      </div>
+      {featured && item.body && <div className="text-sm text-gray-500 mt-1.5 leading-relaxed">{item.body}</div>}
+      {clickable && (
+        <div className="text-xs font-bold mt-2.5 flex items-center gap-1" style={{ color: BRAND.red }}>
+          {item.linkType === "course" ? "Ir a la formación" : "Ver campo"}
+          <ChevronRight size={13} />
         </div>
       )}
+    </div>
+  );
+}
+
+function NewsPanel({ news, onOpenNewsLink }) {
+  if (news.length === 0) {
+    return <div className="text-sm text-gray-400">Sin novedades por ahora.</div>;
+  }
+  const [featured, ...rest] = news;
+  return (
+    <div className="space-y-3">
+      <NewsCard item={featured} featured onOpen={() => onOpenNewsLink(featured)} />
+      {rest.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {rest.slice(0, 4).map((n) => (
+            <NewsCard key={n.id} item={n} onOpen={() => onOpenNewsLink(n)} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Dashboard({ currentUser, news, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges, onOpenCourse, onOpenNewsLink }) {
+  return (
+    <div className="space-y-8">
+      <WelcomeHero
+        currentUser={currentUser}
+        pendingForUser={pendingForUser}
+        completedForUser={completedForUser}
+        assignedCountForUser={assignedCountForUser}
+        progressPercent={progressPercent}
+        points={points}
+        level={level}
+        badges={badges}
+      />
 
       <div>
         <SectionTitle icon={Newspaper}>Novedades</SectionTitle>
-        <div className="space-y-2">
-          {news.length === 0 && <div className="text-sm text-gray-400">Sin novedades por ahora.</div>}
-          {news.map((n) => (
-            <div key={n.id} className="rounded-lg bg-white border p-3" style={{ borderColor: "#00000012" }}>
-              <div className="flex items-center justify-between">
-                <div className="font-semibold text-sm">{n.title}</div>
-                <div className="text-[11px] text-gray-400">{n.date}</div>
-              </div>
-              <div className="text-xs text-gray-600 mt-1">{n.body}</div>
-            </div>
-          ))}
-        </div>
+        <NewsPanel news={news} onOpenNewsLink={onOpenNewsLink} />
       </div>
 
       {currentUser && (
@@ -2038,6 +2130,64 @@ function Dashboard({ currentUser, news, pendingForUser, completedForUser, assign
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {completedForUser.map((c) => (
               <CourseCard key={c.id} course={c} status="completada" onOpen={() => onOpenCourse(c.id)} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
+  const total = overdueForUser.length + dueSoonForUser.length;
+
+  if (total === 0) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-16 text-center">
+        <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ backgroundColor: "#EAF3DE" }}>
+          <CheckCircle2 size={28} style={{ color: "#639922" }} />
+        </div>
+        <div className="font-bold text-lg" style={{ color: BRAND.ink }}>
+          Sin alertas ahora mismo
+        </div>
+        <div className="text-sm text-gray-400 max-w-xs">Aquí verás lo que esté vencido o a punto de vencer (3 días o menos).</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      {overdueForUser.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: "#FCEBEB" }}>
+              <AlertTriangle size={16} style={{ color: "#E9312B" }} />
+            </div>
+            <h2 className="font-extrabold text-lg" style={{ color: "#791F1F" }}>
+              Vencidas ({overdueForUser.length})
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {overdueForUser.map((c) => (
+              <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {dueSoonForUser.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: "#FAEEDA" }}>
+              <Clock size={16} style={{ color: "#C9A227" }} />
+            </div>
+            <h2 className="font-extrabold text-lg" style={{ color: "#633806" }}>
+              Vencen en 3 días o menos ({dueSoonForUser.length})
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {dueSoonForUser.map((c) => (
+              <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
             ))}
           </div>
         </div>
@@ -2443,6 +2593,8 @@ function AdminPanel({
   const [assignSearch, setAssignSearch] = useState("");
   const [newNewsTitle, setNewNewsTitle] = useState("");
   const [newNewsBody, setNewNewsBody] = useState("");
+  const [newNewsLinkType, setNewNewsLinkType] = useState("none");
+  const [newNewsLinkId, setNewNewsLinkId] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
   const [exporting, setExporting] = useState(false);
   const [importPending, setImportPending] = useState(null);
@@ -2893,12 +3045,69 @@ function AdminPanel({
               Contenido
               <textarea value={newNewsBody} onChange={(e) => setNewNewsBody(e.target.value)} rows={2} className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900" style={{ borderColor: "#00000020" }} />
             </label>
+
+            <div>
+              <div className="text-xs font-semibold text-gray-500 mb-1.5">Vincular a (opcional — para que se pueda pinchar y llevar directo)</div>
+              <div className="flex gap-2 flex-wrap mb-2">
+                {[
+                  { id: "none", label: "Nada" },
+                  { id: "course", label: "Una formación" },
+                  { id: "category", label: "Un campo" },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    onClick={() => {
+                      setNewNewsLinkType(opt.id);
+                      setNewNewsLinkId("");
+                    }}
+                    className="text-xs font-semibold px-3 py-1.5 rounded-full border"
+                    style={{
+                      backgroundColor: newNewsLinkType === opt.id ? BRAND.red : "white",
+                      color: newNewsLinkType === opt.id ? "white" : BRAND.ink,
+                      borderColor: newNewsLinkType === opt.id ? BRAND.red : "#00000018",
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {newNewsLinkType === "course" && (
+                <select value={newNewsLinkId} onChange={(e) => setNewNewsLinkId(e.target.value)} className="w-full text-sm rounded-md border px-3 py-2 text-gray-900" style={{ borderColor: "#00000020" }}>
+                  <option value="">Selecciona una formación...</option>
+                  {courses.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.title}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {newNewsLinkType === "category" && (
+                <select value={newNewsLinkId} onChange={(e) => setNewNewsLinkId(e.target.value)} className="w-full text-sm rounded-md border px-3 py-2 text-gray-900" style={{ borderColor: "#00000020" }}>
+                  <option value="">Selecciona un campo...</option>
+                  {CATEGORIES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
             <button
-              disabled={!newNewsTitle.trim()}
+              disabled={!newNewsTitle.trim() || (newNewsLinkType !== "none" && !newNewsLinkId)}
               onClick={() => {
-                onAddNews({ id: uid(), date: todayISO(), title: newNewsTitle, body: newNewsBody });
+                onAddNews({
+                  id: uid(),
+                  date: todayISO(),
+                  title: newNewsTitle,
+                  body: newNewsBody,
+                  linkType: newNewsLinkType === "none" ? null : newNewsLinkType,
+                  linkId: newNewsLinkType === "none" ? null : newNewsLinkId,
+                });
                 setNewNewsTitle("");
                 setNewNewsBody("");
+                setNewNewsLinkType("none");
+                setNewNewsLinkId("");
               }}
               className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40"
               style={{ backgroundColor: BRAND.red }}
@@ -2907,18 +3116,26 @@ function AdminPanel({
             </button>
           </div>
           <div className="space-y-2">
-            {news.map((n) => (
-              <div key={n.id} className="flex items-start justify-between gap-2 rounded-lg border bg-white p-3" style={{ borderColor: "#00000012" }}>
-                <div>
-                  <div className="font-semibold text-sm">{n.title}</div>
-                  <div className="text-xs text-gray-500">{n.body}</div>
-                  <div className="text-[11px] text-gray-400 mt-1">{n.date}</div>
+            {news.map((n) => {
+              const linkedCourse = n.linkType === "course" ? courses.find((c) => c.id === n.linkId) : null;
+              const linkedCategory = n.linkType === "category" ? categoryMeta(n.linkId) : null;
+              return (
+                <div key={n.id} className="flex items-start justify-between gap-2 rounded-lg border bg-white p-3 shadow-sm" style={{ borderColor: "#00000012" }}>
+                  <div>
+                    <div className="font-semibold text-sm">{n.title}</div>
+                    <div className="text-xs text-gray-500">{n.body}</div>
+                    <div className="text-[11px] text-gray-400 mt-1 flex items-center gap-2">
+                      {n.date}
+                      {linkedCourse && <span className="text-blue-600 font-semibold">→ {linkedCourse.title}</span>}
+                      {linkedCategory && <span className="text-blue-600 font-semibold">→ {linkedCategory.label}</span>}
+                    </div>
+                  </div>
+                  <button onClick={() => onDeleteNews(n.id)} className="text-red-500 flex-shrink-0">
+                    <Trash2 size={14} />
+                  </button>
                 </div>
-                <button onClick={() => onDeleteNews(n.id)} className="text-red-500 flex-shrink-0">
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
