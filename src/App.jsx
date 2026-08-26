@@ -3,9 +3,10 @@ import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
   Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
-  Trophy, Award, Star, PartyPopper
+  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
+import * as XLSX from "xlsx";
 
 // Credenciales de Supabase: se leen de variables de entorno (ver .env.example).
 // Nunca pongas aquí la "service_role key" — solo la "anon public key",
@@ -15,8 +16,8 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 const BRAND = {
-  red: "#8B1E1E",
-  redDark: "#6E1717",
+  red: "#E9312B",
+  redDark: "#AF2520",
   gold: "#C9A227",
   blue: "#3E7C96",
   teal: "#2E5F5A",
@@ -77,6 +78,66 @@ function avatarColor(name) {
   return AVATAR_PALETTE[sum % AVATAR_PALETTE.length];
 }
 
+function generatePin() {
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
+
+function normalizeHeader(h) {
+  return String(h || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, ""); // quita acentos
+}
+
+const HEADER_ALIASES = {
+  nombre: ["nombre", "name", "empleado", "nombre y apellido", "nombre completo"],
+  email: ["email", "correo", "e-mail", "correo electronico", "mail"],
+  equipo: ["equipo", "grupo", "team", "departamento", "area"],
+  pin: ["pin", "codigo", "clave"],
+};
+
+function matchColumn(headers, field) {
+  const aliases = HEADER_ALIASES[field];
+  const idx = headers.findIndex((h) => aliases.includes(normalizeHeader(h)));
+  return idx;
+}
+
+// Lee un Excel/CSV de empleados y devuelve filas normalizadas + errores de formato.
+// Columnas reconocidas (en cualquier orden, mayúsc./minúsc. y con o sin acentos):
+// Nombre (obligatoria), Email (opcional), Equipo (opcional), PIN (opcional).
+async function parseEmployeeExcelFile(file) {
+  const buf = await file.arrayBuffer();
+  const workbook = XLSX.read(buf, { type: "array" });
+  const firstSheetName = workbook.SheetNames[0];
+  const sheet = workbook.Sheets[firstSheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" });
+  if (rows.length === 0) return { rows: [], error: "El archivo está vacío." };
+
+  const headers = rows[0];
+  const nameIdx = matchColumn(headers, "nombre");
+  if (nameIdx === -1) {
+    return { rows: [], error: 'No se encontró una columna de nombre. Usa una cabecera como "Nombre" en la primera fila.' };
+  }
+  const emailIdx = matchColumn(headers, "email");
+  const equipoIdx = matchColumn(headers, "equipo");
+  const pinIdx = matchColumn(headers, "pin");
+
+  const parsed = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const name = String(row[nameIdx] || "").trim();
+    if (!name) continue;
+    const email = emailIdx !== -1 ? String(row[emailIdx] || "").trim() : "";
+    const equipo = equipoIdx !== -1 ? String(row[equipoIdx] || "").trim() : "";
+    let pin = pinIdx !== -1 ? String(row[pinIdx] || "").trim().replace(/\D/g, "").slice(0, 4) : "";
+    const pinProvided = pin.length === 4;
+    if (!pinProvided) pin = generatePin();
+    parsed.push({ name, email, equipo, pin, pinProvided });
+  }
+  return { rows: parsed, error: null };
+}
+
 function getVideoEmbedUrl(url) {
   if (!url) return "";
   try {
@@ -121,7 +182,7 @@ const LEVELS = [
   { min: 0, name: "Iniciando", color: "#6B655D" },
   { min: 200, name: "En marcha", color: "#3E7C96" },
   { min: 500, name: "Consolidado", color: "#C9A227" },
-  { min: 1000, name: "Experto", color: "#8B1E1E" },
+  { min: 1000, name: "Experto", color: "#E9312B" },
 ];
 
 function levelForPoints(points) {
@@ -778,11 +839,9 @@ function LoginGate({ employees, adminPin, onEmployeeLogin, onAdminLogin, onAdmin
     >
       <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6">
         <div className="flex flex-col items-center text-center mb-5">
-          <div className="w-14 h-14 rounded-xl flex items-center justify-center font-bold text-lg mb-2 shadow-md" style={{ backgroundColor: BRAND.red, color: "white" }}>
-            MB
-          </div>
+          <img src="/logo-mb.png" alt="Muñoz Bosch" className="h-14 w-auto mb-3" />
           <div className="font-bold text-lg" style={{ color: BRAND.ink }}>
-            Aula Virtual · Muñoz Bosch
+            Aula Virtual
           </div>
           <div className="text-xs text-gray-400">Acceso con nombre y PIN personal</div>
         </div>
@@ -1234,6 +1293,45 @@ export default function AulaVirtualMB() {
     saveKey("mb_employees", updated);
   }
 
+  // Importación masiva desde Excel/CSV. Empleados nuevos se crean; empleados que
+  // ya existían (mismo nombre) actualizan su email, y su PIN solo si el archivo
+  // traía uno explícito para esa fila (para no invalidar el acceso de alguien
+  // sin querer). Los equipos se crean como grupos si no existían todavía.
+  async function importEmployeesBulk(rows) {
+    let updatedEmployees = [...employees];
+    let updatedGroups = [...groups];
+
+    for (const row of rows) {
+      const existingIdx = updatedEmployees.findIndex((e) => e.name.trim().toLowerCase() === row.name.trim().toLowerCase());
+      if (existingIdx === -1) {
+        updatedEmployees.push({ name: row.name, pin: row.pin, email: row.email || "" });
+      } else {
+        updatedEmployees[existingIdx] = {
+          ...updatedEmployees[existingIdx],
+          email: row.email || updatedEmployees[existingIdx].email,
+          pin: row.pinProvided ? row.pin : updatedEmployees[existingIdx].pin,
+        };
+      }
+
+      if (row.equipo) {
+        const groupIdx = updatedGroups.findIndex((g) => g.name.trim().toLowerCase() === row.equipo.trim().toLowerCase());
+        if (groupIdx === -1) {
+          updatedGroups.push({ id: uid(), name: row.equipo, memberNames: [row.name] });
+        } else {
+          const g = updatedGroups[groupIdx];
+          if (!g.memberNames.includes(row.name)) {
+            updatedGroups[groupIdx] = { ...g, memberNames: [...g.memberNames, row.name] };
+          }
+        }
+      }
+    }
+
+    setEmployees(updatedEmployees);
+    setGroups(updatedGroups);
+    await saveKey("mb_employees", updatedEmployees);
+    await saveKey("mb_groups", updatedGroups);
+  }
+
   async function saveCourse(course) {
     let updated;
     if (courses.find((c) => c.id === course.id)) updated = courses.map((c) => (c.id === course.id ? course : c));
@@ -1346,13 +1444,12 @@ export default function AulaVirtualMB() {
     <div className="min-h-screen w-full" style={{ backgroundColor: BRAND.cream, fontFamily: "Arial, Helvetica, sans-serif", color: BRAND.ink }}>
       <div className="sticky top-0 z-20 shadow-lg" style={{ backgroundColor: BRAND.red }}>
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-md flex items-center justify-center font-bold text-sm shadow-sm" style={{ backgroundColor: "white", color: BRAND.red }}>
-              MB
+          <div className="flex items-center gap-2.5">
+            <div className="rounded-md flex items-center justify-center shadow-sm px-2 py-1.5" style={{ backgroundColor: "white" }}>
+              <img src="/logo-mb.png" alt="Muñoz Bosch" className="h-5 w-auto" />
             </div>
             <div className="text-white leading-tight">
               <div className="font-bold text-base tracking-tight">Aula Virtual</div>
-              <div className="text-[11px] opacity-80 -mt-0.5">Muñoz Bosch</div>
             </div>
           </div>
 
@@ -1478,6 +1575,7 @@ export default function AulaVirtualMB() {
             onRemoveEmployee={removeEmployee}
             onUpdateEmployeePin={updateEmployeePin}
             onUpdateEmployeeEmail={updateEmployeeEmail}
+            onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
             onDeleteGroup={deleteGroup}
             onUpdateGroupMembers={updateGroupMembers}
@@ -1964,6 +2062,7 @@ function AdminPanel({
   onRemoveEmployee,
   onUpdateEmployeePin,
   onUpdateEmployeeEmail,
+  onImportEmployeesBulk,
   onAddGroup,
   onDeleteGroup,
   onUpdateGroupMembers,
@@ -2000,6 +2099,10 @@ function AdminPanel({
   const [editingEmailFor, setEditingEmailFor] = useState(null);
   const [editingEmailValue, setEditingEmailValue] = useState("");
   const [employeeSearch, setEmployeeSearch] = useState("");
+  const [importPreviewRows, setImportPreviewRows] = useState(null);
+  const [importFileError, setImportFileError] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importDone, setImportDone] = useState(null);
   const [groupMemberSearch, setGroupMemberSearch] = useState({});
   const [assignSearch, setAssignSearch] = useState("");
   const [newNewsTitle, setNewNewsTitle] = useState("");
@@ -2509,6 +2612,139 @@ function AdminPanel({
             >
               Añadir
             </button>
+          </div>
+
+          <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
+            <div className="font-bold text-sm mb-1 flex items-center gap-2">
+              <FileSpreadsheet size={16} style={{ color: BRAND.blue }} />
+              Importar varios de golpe desde Excel
+            </div>
+            <div className="text-xs text-gray-500 mb-3">
+              Sube un archivo .xlsx o .csv con columnas <strong>Nombre</strong> (obligatoria), y opcionalmente{" "}
+              <strong>Email</strong>, <strong>Equipo</strong> y <strong>PIN</strong>. Si no incluyes PIN, se genera uno
+              aleatorio por persona — te lo mostraré al terminar para que lo repartas. Si la columna Equipo nombra un
+              grupo que no existe todavía, se crea solo.
+            </div>
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                setImportFileError("");
+                setImportDone(null);
+                const { rows, error } = await parseEmployeeExcelFile(file);
+                if (error) {
+                  setImportFileError(error);
+                  setImportPreviewRows(null);
+                } else if (rows.length === 0) {
+                  setImportFileError("No se encontró ninguna fila con nombre.");
+                  setImportPreviewRows(null);
+                } else {
+                  setImportPreviewRows(rows);
+                }
+                e.target.value = "";
+              }}
+              className="text-sm"
+            />
+            {importFileError && <div className="text-xs text-red-600 mt-2">{importFileError}</div>}
+
+            {importPreviewRows && (
+              <div className="mt-3">
+                <div className="text-xs font-semibold text-gray-500 mb-2">
+                  Previsualización — {importPreviewRows.length} persona{importPreviewRows.length === 1 ? "" : "s"}. Revisa
+                  antes de confirmar.
+                </div>
+                <div className="max-h-64 overflow-y-auto rounded-lg border" style={{ borderColor: "#00000018" }}>
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-gray-500 border-b sticky top-0 bg-white" style={{ borderColor: "#00000012" }}>
+                        <th className="px-2 py-1.5">Nombre</th>
+                        <th className="px-2 py-1.5">Email</th>
+                        <th className="px-2 py-1.5">Equipo</th>
+                        <th className="px-2 py-1.5">PIN</th>
+                        <th className="px-2 py-1.5">Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreviewRows.map((r, i) => {
+                        const exists = employees.some((e) => e.name.trim().toLowerCase() === r.name.trim().toLowerCase());
+                        return (
+                          <tr key={i} className="border-b last:border-0" style={{ borderColor: "#00000008" }}>
+                            <td className="px-2 py-1.5 font-medium">{r.name}</td>
+                            <td className="px-2 py-1.5 text-gray-500">{r.email || "—"}</td>
+                            <td className="px-2 py-1.5 text-gray-500">{r.equipo || "—"}</td>
+                            <td className="px-2 py-1.5">{r.pin}{!r.pinProvided && <span className="text-gray-400"> (generado)</span>}</td>
+                            <td className="px-2 py-1.5">
+                              {exists ? (
+                                <span className="text-amber-700 font-semibold">Ya existe — se actualiza</span>
+                              ) : (
+                                <span className="text-green-700 font-semibold">Nuevo</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex gap-2 mt-3">
+                  <button
+                    disabled={importing}
+                    onClick={async () => {
+                      setImporting(true);
+                      await onImportEmployeesBulk(importPreviewRows);
+                      setImportDone(importPreviewRows);
+                      setImportPreviewRows(null);
+                      setImporting(false);
+                    }}
+                    className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 flex items-center gap-1.5"
+                    style={{ backgroundColor: BRAND.red }}
+                  >
+                    {importing && <Loader2 size={14} className="animate-spin" />}
+                    <Upload size={14} />
+                    Confirmar importación
+                  </button>
+                  <button
+                    onClick={() => setImportPreviewRows(null)}
+                    className="text-sm font-semibold rounded-md px-4 py-2 border"
+                    style={{ borderColor: "#00000020", color: BRAND.ink }}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {importDone && (
+              <div className="mt-3 rounded-lg p-3" style={{ backgroundColor: "#DCFCE7" }}>
+                <div className="text-sm font-semibold text-green-800 mb-1 flex items-center gap-1.5">
+                  <CheckCircle2 size={14} /> Importación completada — {importDone.length} persona{importDone.length === 1 ? "" : "s"}
+                </div>
+                <div className="text-xs text-green-800 mb-2">
+                  Apunta o descarga los PIN generados para repartirlos — no vuelven a mostrarse aquí.
+                </div>
+                <button
+                  onClick={() => {
+                    const lines = ["Nombre,Email,Equipo,PIN"];
+                    importDone.forEach((r) => lines.push(`"${r.name}","${r.email}","${r.equipo}","${r.pin}"`));
+                    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `pins-importados-${todayISO()}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="text-xs font-semibold rounded-md px-3 py-1.5 border"
+                  style={{ borderColor: "#16653480", color: "#166534" }}
+                >
+                  Descargar PIN en CSV
+                </button>
+              </div>
+            )}
           </div>
 
           {employees.length > 8 && (
