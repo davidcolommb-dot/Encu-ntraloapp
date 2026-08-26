@@ -93,6 +93,14 @@ async function hashPassword(pw) {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+// Un hash SHA-256 real siempre son 64 caracteres hexadecimales. Si lo guardado no
+// tiene esa forma (por ejemplo, un PIN de 4 dígitos del sistema anterior), lo
+// tratamos como si no hubiera contraseña configurada, en vez de dejar a alguien
+// bloqueado comparando su contraseña nueva contra un valor que nunca coincidirá.
+function isValidHash(h) {
+  return typeof h === "string" && /^[0-9a-f]{64}$/.test(h);
+}
+
 // Sesión recordada en este navegador (no en el servidor), para no pedir
 // contraseña de nuevo cada vez que se recarga la página.
 const SESSION_KEY = "mb_session_v1";
@@ -1190,13 +1198,18 @@ export default function AulaVirtualMB() {
       const normalizedEmployees = (emp || []).map((e) => {
         if (typeof e === "string") return { name: e, passwordHash: null, email: "" };
         const { pin, pinProvided, ...rest } = e;
-        return { email: "", passwordHash: null, ...rest };
+        const validHash = isValidHash(rest.passwordHash) ? rest.passwordHash : null;
+        return { email: "", ...rest, passwordHash: validHash };
       });
       setCourses(finalCourses);
       setNews(finalNews);
       setEmployees(normalizedEmployees);
       setGroups(grp || []);
-      setAdminPasswordHash(pwHash);
+      // Igual que con los empleados: un PIN antiguo de 4 dígitos no es un hash válido.
+      // Si detectamos que lo guardado no tiene forma de hash SHA-256, lo tratamos como
+      // "sin configurar todavía", para que se pueda crear una contraseña nueva sin
+      // quedarse bloqueado.
+      setAdminPasswordHash(isValidHash(pwHash) ? pwHash : "");
       setLastBackupAt(lastBk);
       setSheetsUrl(sUrl || "");
 
