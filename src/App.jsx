@@ -1471,6 +1471,54 @@ export default function AulaVirtualMB() {
     saveKey("mb_employees", updated);
   }
 
+  // Renombrar a alguien es delicado: su nombre se usa como identificador en
+  // grupos y en el progreso de cada formación. Antes de tocar nada, comprobamos
+  // que el nuevo nombre no coincida con otra persona ya existente, y luego
+  // actualizamos en cascada: empleados, grupos, y el progreso ya guardado en
+  // cada formación (cargando primero los datos más recientes de Supabase para
+  // no perder nada que no estuviera todavía en memoria).
+  async function renameEmployee(oldName, newName) {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return { ok: false, error: "Nombre no válido." };
+    if (employees.some((e) => e.name.trim().toLowerCase() === trimmed.toLowerCase())) {
+      return { ok: false, error: "Ya existe otra persona con ese nombre." };
+    }
+
+    const updatedEmployees = employees.map((e) => (e.name === oldName ? { ...e, name: trimmed } : e));
+    setEmployees(updatedEmployees);
+    await saveKey("mb_employees", updatedEmployees);
+
+    const updatedGroups = groups.map((g) =>
+      g.memberNames.includes(oldName) ? { ...g, memberNames: g.memberNames.map((n) => (n === oldName ? trimmed : n)) } : g
+    );
+    setGroups(updatedGroups);
+    await saveKey("mb_groups", updatedGroups);
+
+    // Progreso: cargamos el estado más reciente de cada formación y renombramos
+    // la clave si esa persona tenía algo registrado ahí.
+    const freshCompletions = {};
+    for (const c of courses) {
+      const rec = await loadKey(`mb_completions_course_${c.id}`, {});
+      if (rec && rec[oldName]) {
+        const renamed = { ...rec };
+        renamed[trimmed] = renamed[oldName];
+        delete renamed[oldName];
+        await saveKey(`mb_completions_course_${c.id}`, renamed);
+        freshCompletions[c.id] = renamed;
+      } else {
+        freshCompletions[c.id] = rec;
+      }
+    }
+    setCompletionsByCourse((prev) => ({ ...prev, ...freshCompletions }));
+
+    if (currentUser === oldName) {
+      setCurrentUser(trimmed);
+      saveSession({ type: "employee", name: trimmed });
+    }
+
+    return { ok: true };
+  }
+
   // Importación masiva desde Excel/CSV. Empleados nuevos se crean sin contraseña
   // (la crean ellos mismos en su primer acceso, verificando su email). Empleados
   // que ya existían (mismo nombre) solo actualizan su email. Los equipos se crean
@@ -1530,6 +1578,11 @@ export default function AulaVirtualMB() {
   }
   async function addNews(item) {
     const updated = [item, ...news];
+    setNews(updated);
+    await saveKey("mb_news", updated);
+  }
+  async function updateNews(id, fields) {
+    const updated = news.map((n) => (n.id === id ? { ...n, ...fields } : n));
     setNews(updated);
     await saveKey("mb_news", updated);
   }
@@ -1815,11 +1868,13 @@ export default function AulaVirtualMB() {
             onSaveCourse={saveCourse}
             onDeleteCourse={deleteCourse}
             onAddNews={addNews}
+            onUpdateNews={updateNews}
             onDeleteNews={deleteNews}
             onAddEmployee={addEmployee}
             onRemoveEmployee={removeEmployee}
             onResetEmployeePassword={resetEmployeePassword}
             onUpdateEmployeeEmail={updateEmployeeEmail}
+            onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
             onDeleteGroup={deleteGroup}
@@ -2602,11 +2657,13 @@ function AdminPanel({
   onSaveCourse,
   onDeleteCourse,
   onAddNews,
+  onUpdateNews,
   onDeleteNews,
   onAddEmployee,
   onRemoveEmployee,
   onResetEmployeePassword,
   onUpdateEmployeeEmail,
+  onRenameEmployee,
   onImportEmployeesBulk,
   onAddGroup,
   onDeleteGroup,
@@ -2639,6 +2696,9 @@ function AdminPanel({
   const [newEmployeeName, setNewEmployeeName] = useState("");
   const [newEmployeeEmail, setNewEmployeeEmail] = useState("");
   const [editingEmailFor, setEditingEmailFor] = useState(null);
+  const [editingNameFor, setEditingNameFor] = useState(null);
+  const [editingNameValue, setEditingNameValue] = useState("");
+  const [renameError, setRenameError] = useState("");
   const [editingEmailValue, setEditingEmailValue] = useState("");
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [importPreviewRows, setImportPreviewRows] = useState(null);
@@ -2651,6 +2711,7 @@ function AdminPanel({
   const [newNewsBody, setNewNewsBody] = useState("");
   const [newNewsLinkType, setNewNewsLinkType] = useState("none");
   const [newNewsLinkId, setNewNewsLinkId] = useState("");
+  const [editingNewsId, setEditingNewsId] = useState(null);
   const [newGroupName, setNewGroupName] = useState("");
   const [exporting, setExporting] = useState(false);
   const [importPending, setImportPending] = useState(null);
@@ -3106,6 +3167,11 @@ function AdminPanel({
       {tab === "news" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 space-y-3 shadow-sm" style={{ borderColor: "#00000012" }}>
+            {editingNewsId && (
+              <div className="text-xs font-semibold rounded-md px-3 py-2" style={{ backgroundColor: "var(--info-soft)", color: "var(--info-text)" }}>
+                Editando novedad existente
+              </div>
+            )}
             <TextInput label="Título de la novedad" value={newNewsTitle} onChange={setNewNewsTitle} placeholder="Ej. Nueva formación disponible" />
             <label className="block text-xs font-semibold text-gray-500 mb-1">
               Contenido
@@ -3159,27 +3225,48 @@ function AdminPanel({
               )}
             </div>
 
-            <button
-              disabled={!newNewsTitle.trim() || (newNewsLinkType !== "none" && !newNewsLinkId)}
-              onClick={() => {
-                onAddNews({
-                  id: uid(),
-                  date: todayISO(),
-                  title: newNewsTitle,
-                  body: newNewsBody,
-                  linkType: newNewsLinkType === "none" ? null : newNewsLinkType,
-                  linkId: newNewsLinkType === "none" ? null : newNewsLinkId,
-                });
-                setNewNewsTitle("");
-                setNewNewsBody("");
-                setNewNewsLinkType("none");
-                setNewNewsLinkId("");
-              }}
-              className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40"
-              style={{ backgroundColor: BRAND.red }}
-            >
-              Publicar novedad
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                disabled={!newNewsTitle.trim() || (newNewsLinkType !== "none" && !newNewsLinkId)}
+                onClick={() => {
+                  const fields = {
+                    title: newNewsTitle,
+                    body: newNewsBody,
+                    linkType: newNewsLinkType === "none" ? null : newNewsLinkType,
+                    linkId: newNewsLinkType === "none" ? null : newNewsLinkId,
+                  };
+                  if (editingNewsId) {
+                    onUpdateNews(editingNewsId, fields);
+                    setEditingNewsId(null);
+                  } else {
+                    onAddNews({ id: uid(), date: todayISO(), ...fields });
+                  }
+                  setNewNewsTitle("");
+                  setNewNewsBody("");
+                  setNewNewsLinkType("none");
+                  setNewNewsLinkId("");
+                }}
+                className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40"
+                style={{ backgroundColor: BRAND.red }}
+              >
+                {editingNewsId ? "Guardar cambios" : "Publicar novedad"}
+              </button>
+              {editingNewsId && (
+                <button
+                  onClick={() => {
+                    setEditingNewsId(null);
+                    setNewNewsTitle("");
+                    setNewNewsBody("");
+                    setNewNewsLinkType("none");
+                    setNewNewsLinkId("");
+                  }}
+                  className="text-sm font-semibold px-3 py-2"
+                  style={{ color: BRAND.ink }}
+                >
+                  Cancelar
+                </button>
+              )}
+            </div>
           </div>
           <div className="space-y-2">
             {news.map((n) => {
@@ -3196,9 +3283,24 @@ function AdminPanel({
                       {linkedCategory && <span className="text-blue-600 font-semibold">→ {linkedCategory.label}</span>}
                     </div>
                   </div>
-                  <button onClick={() => onDeleteNews(n.id)} className="text-red-500 flex-shrink-0">
-                    <Trash2 size={14} />
-                  </button>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <button
+                      onClick={() => {
+                        setEditingNewsId(n.id);
+                        setNewNewsTitle(n.title);
+                        setNewNewsBody(n.body || "");
+                        setNewNewsLinkType(n.linkType || "none");
+                        setNewNewsLinkId(n.linkId || "");
+                      }}
+                      className="text-xs font-semibold"
+                      style={{ color: BRAND.blue }}
+                    >
+                      Editar
+                    </button>
+                    <button onClick={() => onDeleteNews(n.id)} className="text-red-500">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -3363,7 +3465,57 @@ function AdminPanel({
                   <div className="flex items-center gap-2 min-w-0">
                     <Avatar name={e.name} size={30} />
                     <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{e.name}</div>
+                      {editingNameFor === e.name ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            value={editingNameValue}
+                            onChange={(ev) => {
+                              setEditingNameValue(ev.target.value);
+                              setRenameError("");
+                            }}
+                            onKeyDown={async (ev) => {
+                              if (ev.key === "Enter") {
+                                const res = await onRenameEmployee(e.name, editingNameValue);
+                                if (res.ok) setEditingNameFor(null);
+                                else setRenameError(res.error);
+                              }
+                            }}
+                            className="text-sm rounded-md border px-2 py-1 w-40"
+                            style={{ borderColor: "#00000020" }}
+                            autoFocus
+                          />
+                          <button
+                            onClick={async () => {
+                              const res = await onRenameEmployee(e.name, editingNameValue);
+                              if (res.ok) setEditingNameFor(null);
+                              else setRenameError(res.error);
+                            }}
+                            className="text-[11px] font-semibold"
+                            style={{ color: BRAND.blue }}
+                          >
+                            Guardar
+                          </button>
+                          <button onClick={() => { setEditingNameFor(null); setRenameError(""); }} className="text-[11px] text-gray-400">
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <div className="text-sm font-medium truncate">{e.name}</div>
+                          <button
+                            onClick={() => {
+                              setEditingNameFor(e.name);
+                              setEditingNameValue(e.name);
+                              setRenameError("");
+                            }}
+                            title="Cambiar nombre"
+                            className="text-gray-300 hover:text-gray-500 flex-shrink-0"
+                          >
+                            <Settings size={11} />
+                          </button>
+                        </div>
+                      )}
+                      {renameError && editingNameFor === e.name && <div className="text-[10px] text-red-600 mt-0.5">{renameError}</div>}
                       {editingEmailFor === e.name ? (
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <input
@@ -3392,7 +3544,7 @@ function AdminPanel({
                           }}
                           className="text-[11px] text-gray-400 hover:underline truncate block"
                         >
-                          {e.email || "Sin email — añadir"}
+                          {e.email || "Sin email — añadir"} <span style={{ opacity: 0.6 }}>(editar)</span>
                         </button>
                       )}
                     </div>
