@@ -2,10 +2,139 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Brand */
+  --brand: #E9312B;
+  --brand-hover: #D42B25;
+  --brand-active: #AF2520;
+  --brand-soft: #FEF0F0;
+  --brand-muted: #FCEBEB;
+
+  /* Surfaces */
+  --bg-page: #F8F7F5;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #FDFCFB;
+  --bg-inset: #F3F1EE;
+  --bg-overlay: rgba(0,0,0,0.45);
+
+  /* Text */
+  --text-primary: #1A1816;
+  --text-secondary: #5C5752;
+  --text-muted: #9C9690;
+  --text-inverse: #FFFFFF;
+  --text-brand: #E9312B;
+
+  /* Borders */
+  --border: #E8E5E0;
+  --border-strong: #D5D0CA;
+  --border-brand: #E9312B;
+
+  /* Semantic */
+  --success: #2D8A4E;
+  --success-soft: #EAF5EE;
+  --success-text: #1A5C32;
+  --warning: #B8860B;
+  --warning-soft: #FDF6E3;
+  --warning-text: #6B4D00;
+  --danger: #D63031;
+  --danger-soft: #FEF0F0;
+  --danger-text: #8B1A1A;
+  --info: #2E7D96;
+  --info-soft: #EAF4F7;
+  --info-text: #1A4D5E;
+
+  /* Category colors */
+  --cat-protocolos: #3E7C96;
+  --cat-generica: #B8860B;
+  --cat-especifica: #E9312B;
+  --cat-ia: #2E7D6A;
+
+  /* Spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Shadows — very subtle */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md: 0 2px 8px rgba(0,0,0,0.06);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,0.08);
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+
+  /* Transitions */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+}
+
 html, body, #root {
   height: 100%;
 }
 
 body {
   margin: 0;
+  font-family: var(--font-sans);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: var(--text-base);
+  line-height: 1.5;
 }
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+/* Scrollbar subtle */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* Focus ring */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* ── Responsive header ── */
+.mb-header-inner {
+  display: flex; align-items: center; justify-content: space-between; height: 56px; gap: 12px;
+}
+@media (max-width: 640px) {
+  .mb-header-inner { gap: 6px; }
+  .mb-app-name { display: none; }
+  .mb-nav-label { display: none; }
+  .mb-nav-btn { padding: 8px !important; }
+  .mb-view-as-select { display: none; }
+  .mb-user-name { display: none; }
+  .mb-admin-label { display: none; }
+}
+
+/* Utility: line clamp */
+.line-clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
