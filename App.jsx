@@ -78,10 +78,6 @@ function avatarColor(name) {
   return AVATAR_PALETTE[sum % AVATAR_PALETTE.length];
 }
 
-function generatePin() {
-  return String(Math.floor(1000 + Math.random() * 9000));
-}
-
 // Hash de contraseña de un solo sentido (SHA-256): nadie, ni el admin, puede
 // "leer" la contraseña original a partir de esto — solo comparar si una
 // contraseña introducida coincide. No es tan robusto como bcrypt/argon2 (no
@@ -649,84 +645,21 @@ function ProgressRing({ percent, size = 64, color = BRAND.red, label }) {
   );
 }
 
-function PinDots({ length, filled }) {
-  return (
-    <div className="flex gap-3 justify-center my-3">
-      {Array.from({ length }).map((_, i) => (
-        <div
-          key={i}
-          className="w-3.5 h-3.5 rounded-full transition"
-          style={{ backgroundColor: i < filled ? BRAND.red : "#00000020" }}
-        />
-      ))}
-    </div>
-  );
-}
-
-function PinPad({ onComplete }) {
-  const [pin, setPin] = useState("");
-  useEffect(() => {
-    if (pin.length === 4) {
-      const p = pin;
-      const t = setTimeout(() => onComplete(p), 120);
-      return () => clearTimeout(t);
-    }
-  }, [pin]);
-  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "back"];
-  return (
-    <div>
-      <PinDots length={4} filled={pin.length} />
-      <div className="grid grid-cols-3 gap-2 max-w-[220px] mx-auto">
-        {keys.map((k, i) =>
-          k === "" ? (
-            <div key={i} />
-          ) : (
-            <button
-              key={i}
-              onClick={() => (k === "back" ? setPin((p) => p.slice(0, -1)) : pin.length < 4 && setPin((p) => p + k))}
-              className="h-12 rounded-lg font-bold text-lg flex items-center justify-center transition-all duration-150 active:scale-90 shadow-sm hover:shadow-md hover:-translate-y-0.5"
-              style={{ backgroundColor: "white", border: "1px solid #00000018", color: BRAND.ink }}
-            >
-              {k === "back" ? "⌫" : k}
-            </button>
-          )
-        )}
-      </div>
-    </div>
-  );
-}
-
 function DeadlineChip({ deadline, completed }) {
   if (completed) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full bg-green-100 text-green-800">
-        <CheckCircle2 size={13} /> Completada
-      </span>
-    );
+    return <StatusPill icon={CheckCircle2} label="Completada" variant="success" />;
   }
   if (!deadline) {
-    return <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-500">Sin plazo</span>;
+    return <StatusPill label="Sin plazo" variant="neutral" />;
   }
   const d = daysUntil(deadline);
   if (d < 0) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full bg-red-100 text-red-700">
-        <AlertTriangle size={13} /> Vencida hace {Math.abs(d)} día{Math.abs(d) === 1 ? "" : "s"}
-      </span>
-    );
+    return <StatusPill icon={AlertTriangle} label={`Vencida hace ${Math.abs(d)} día${Math.abs(d) === 1 ? "" : "s"}`} variant="danger" />;
   }
   if (d <= 3) {
-    return (
-      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded-full bg-amber-100 text-amber-800">
-        <Clock size={13} /> Quedan {d} día{d === 1 ? "" : "s"}
-      </span>
-    );
+    return <StatusPill icon={Clock} label={`Quedan ${d} día${d === 1 ? "" : "s"}`} variant="warning" />;
   }
-  return (
-    <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-600">
-      <Clock size={13} /> {d} días restantes
-    </span>
-  );
+  return <StatusPill icon={Clock} label={`${d} días restantes`} variant="neutral" />;
 }
 
 // Genera un par "píldora" (fondo muy suave + texto oscuro del mismo tono) a partir
@@ -742,10 +675,13 @@ function CategoryTag({ id, small }) {
   const { bg, text } = pillColors(meta.color);
   return (
     <span
-      className={`inline-flex items-center gap-1.5 font-semibold rounded-full ${small ? "text-[11px] px-2.5 py-1" : "text-xs px-3 py-1.5"}`}
-      style={{ backgroundColor: bg, color: text }}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 5, fontWeight: 500,
+        borderRadius: "var(--radius-full)", backgroundColor: bg, color: text,
+        fontSize: small ? 11 : 12, padding: small ? "3px 10px" : "4px 12px",
+      }}
     >
-      <Icon size={small ? 12 : 13} />
+      <Icon size={small ? 11 : 12} />
       {meta.label}
     </span>
   );
@@ -964,10 +900,9 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
 
   return (
     <div
-      className="min-h-screen w-full flex items-center justify-center px-4"
-      style={{ background: `linear-gradient(160deg, ${BRAND.red} 0%, ${BRAND.redDark} 60%)`, fontFamily: "Arial, Helvetica, sans-serif" }}
+      style={{ minHeight: "100vh", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, backgroundColor: "var(--bg-page)", fontFamily: "var(--font-sans)" }}
     >
-      <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl p-6">
+      <div style={{ width: "100%", maxWidth: 400, borderRadius: "var(--radius-xl)", backgroundColor: "var(--bg-card)", border: "1px solid var(--border)", boxShadow: "var(--shadow-lg)", padding: "var(--sp-6)" }}>
         <div className="flex flex-col items-center text-center mb-5">
           <img src="/logo-mb.png" alt="Muñoz Bosch" className="h-14 w-auto mb-3" />
           <div className="font-bold text-lg" style={{ color: BRAND.ink }}>
@@ -989,7 +924,7 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
                   disabled={!typedName.trim()}
                   onClick={goToPassword}
                   className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40 transition-all duration-150 active:scale-[0.98]"
-                  style={{ backgroundColor: BRAND.red }}
+                  style={{ backgroundColor: "var(--brand)" }}
                 >
                   Continuar
                 </button>
@@ -1011,7 +946,7 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
                 setMode(adminPasswordHash ? "admin-password" : "admin-create-password");
               }}
               className="w-full flex items-center justify-center gap-2 text-sm font-semibold rounded-lg py-2.5 border transition hover:bg-gray-50"
-              style={{ borderColor: "#00000018", color: BRAND.red }}
+              style={{ borderColor: "var(--border)", color: "var(--brand)" }}
             >
               <ShieldCheck size={15} /> Acceder como administrador
             </button>
@@ -1032,7 +967,7 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
               disabled={!password || busy}
               onClick={submitEmployeePassword}
               className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
-              style={{ backgroundColor: BRAND.red }}
+              style={{ backgroundColor: "var(--brand)" }}
             >
               {busy ? "Comprobando..." : "Entrar"}
             </button>
@@ -1055,7 +990,7 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
               disabled={!emailCheck}
               onClick={submitEmailCheck}
               className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
-              style={{ backgroundColor: BRAND.red }}
+              style={{ backgroundColor: "var(--brand)" }}
             >
               Continuar
             </button>
@@ -1066,8 +1001,8 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
         {mode === "employee-create-password" && (
           <div>
             <div className="flex flex-col items-center mb-3 text-center">
-              <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: `${BRAND.gold}20` }}>
-                <KeyRound size={20} style={{ color: BRAND.gold }} />
+              <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: "var(--warning-soft)" }}>
+                <KeyRound size={20} style={{ color: "var(--warning)" }} />
               </div>
               <div className="font-semibold text-sm mt-2">Crea tu contraseña</div>
               <div className="text-[11px] text-gray-400">Mínimo 6 caracteres. Que no sea una que uses en otro sitio importante.</div>
@@ -1080,7 +1015,7 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
               disabled={!newPass1 || !newPass2 || busy}
               onClick={submitCreatePassword}
               className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
-              style={{ backgroundColor: BRAND.red }}
+              style={{ backgroundColor: "var(--brand)" }}
             >
               {busy ? "Creando..." : "Crear contraseña y entrar"}
             </button>
@@ -1094,8 +1029,8 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
               <ChevronLeft size={14} /> Volver
             </button>
             <div className="flex flex-col items-center mb-3">
-              <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: `${BRAND.red}15` }}>
-                <Lock size={20} style={{ color: BRAND.red }} />
+              <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: "var(--brand-soft)" }}>
+                <Lock size={20} style={{ color: "var(--brand)" }} />
               </div>
               <div className="font-semibold text-sm mt-2">Acceso administrador</div>
             </div>
@@ -1104,7 +1039,7 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
               disabled={!password || busy}
               onClick={submitAdminPassword}
               className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
-              style={{ backgroundColor: BRAND.red }}
+              style={{ backgroundColor: "var(--brand)" }}
             >
               {busy ? "Comprobando..." : "Entrar"}
             </button>
@@ -1118,8 +1053,8 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
               <ChevronLeft size={14} /> Volver
             </button>
             <div className="flex flex-col items-center mb-3 text-center">
-              <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: `${BRAND.gold}20` }}>
-                <KeyRound size={20} style={{ color: BRAND.gold }} />
+              <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: "var(--warning-soft)" }}>
+                <KeyRound size={20} style={{ color: "var(--warning)" }} />
               </div>
               <div className="font-semibold text-sm mt-2">Crea el acceso de administrador</div>
               <div className="text-[11px] text-gray-400">Primer acceso — mínimo 6 caracteres</div>
@@ -1132,7 +1067,7 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
               disabled={!newPass1 || !newPass2 || busy}
               onClick={submitAdminCreate}
               className="w-full mt-3 text-sm font-bold rounded-lg py-2.5 text-white disabled:opacity-40"
-              style={{ backgroundColor: BRAND.red }}
+              style={{ backgroundColor: "var(--brand)" }}
             >
               {busy ? "Creando..." : "Crear y entrar"}
             </button>
@@ -1536,6 +1471,54 @@ export default function AulaVirtualMB() {
     saveKey("mb_employees", updated);
   }
 
+  // Renombrar a alguien es delicado: su nombre se usa como identificador en
+  // grupos y en el progreso de cada formación. Antes de tocar nada, comprobamos
+  // que el nuevo nombre no coincida con otra persona ya existente, y luego
+  // actualizamos en cascada: empleados, grupos, y el progreso ya guardado en
+  // cada formación (cargando primero los datos más recientes de Supabase para
+  // no perder nada que no estuviera todavía en memoria).
+  async function renameEmployee(oldName, newName) {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return { ok: false, error: "Nombre no válido." };
+    if (employees.some((e) => e.name.trim().toLowerCase() === trimmed.toLowerCase())) {
+      return { ok: false, error: "Ya existe otra persona con ese nombre." };
+    }
+
+    const updatedEmployees = employees.map((e) => (e.name === oldName ? { ...e, name: trimmed } : e));
+    setEmployees(updatedEmployees);
+    await saveKey("mb_employees", updatedEmployees);
+
+    const updatedGroups = groups.map((g) =>
+      g.memberNames.includes(oldName) ? { ...g, memberNames: g.memberNames.map((n) => (n === oldName ? trimmed : n)) } : g
+    );
+    setGroups(updatedGroups);
+    await saveKey("mb_groups", updatedGroups);
+
+    // Progreso: cargamos el estado más reciente de cada formación y renombramos
+    // la clave si esa persona tenía algo registrado ahí.
+    const freshCompletions = {};
+    for (const c of courses) {
+      const rec = await loadKey(`mb_completions_course_${c.id}`, {});
+      if (rec && rec[oldName]) {
+        const renamed = { ...rec };
+        renamed[trimmed] = renamed[oldName];
+        delete renamed[oldName];
+        await saveKey(`mb_completions_course_${c.id}`, renamed);
+        freshCompletions[c.id] = renamed;
+      } else {
+        freshCompletions[c.id] = rec;
+      }
+    }
+    setCompletionsByCourse((prev) => ({ ...prev, ...freshCompletions }));
+
+    if (currentUser === oldName) {
+      setCurrentUser(trimmed);
+      saveSession({ type: "employee", name: trimmed });
+    }
+
+    return { ok: true };
+  }
+
   // Importación masiva desde Excel/CSV. Empleados nuevos se crean sin contraseña
   // (la crean ellos mismos en su primer acceso, verificando su email). Empleados
   // que ya existían (mismo nombre) solo actualizan su email. Los equipos se crean
@@ -1595,6 +1578,11 @@ export default function AulaVirtualMB() {
   }
   async function addNews(item) {
     const updated = [item, ...news];
+    setNews(updated);
+    await saveKey("mb_news", updated);
+  }
+  async function updateNews(id, fields) {
+    const updated = news.map((n) => (n.id === id ? { ...n, ...fields } : n));
     setNews(updated);
     await saveKey("mb_news", updated);
   }
@@ -1659,8 +1647,9 @@ export default function AulaVirtualMB() {
 
   if (loading) {
     return (
-      <div className="min-h-[400px] flex items-center justify-center" style={{ backgroundColor: BRAND.cream }}>
-        <Loader2 className="animate-spin" size={28} style={{ color: BRAND.red }} />
+      <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "var(--sp-4)", backgroundColor: "var(--bg-page)" }}>
+        <img src="/logo-mb.png" alt="Muñoz Bosch" style={{ height: 32, width: "auto", opacity: 0.9 }} />
+        <Loader2 className="animate-spin" size={22} style={{ color: "var(--brand)" }} />
       </div>
     );
   }
@@ -1689,115 +1678,123 @@ export default function AulaVirtualMB() {
   }
 
   return (
-    <div className="min-h-screen w-full" style={{ backgroundColor: BRAND.cream, fontFamily: "Arial, Helvetica, sans-serif", color: BRAND.ink }}>
-      <div className="sticky top-0 z-20 shadow-lg" style={{ backgroundColor: BRAND.red }}>
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2.5">
-            <div className="rounded-md flex items-center justify-center shadow-sm px-2 py-1.5" style={{ backgroundColor: "white" }}>
-              <img src="/logo-mb.png" alt="Muñoz Bosch" className="h-5 w-auto" />
+    <div style={{ minHeight: "100vh", backgroundColor: "var(--bg-page)", fontFamily: "var(--font-sans)", color: "var(--text-primary)" }}>
+      {/* ── HEADER ── */}
+      <header style={{ position: "sticky", top: 0, zIndex: 20, backgroundColor: "var(--bg-card)", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ maxWidth: 960, margin: "0 auto", padding: "0 var(--sp-4)" }}>
+          <div className="mb-header-inner">
+            {/* Logo + nombre */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+              <img src="/logo-mb.png" alt="Muñoz Bosch" style={{ height: 26, width: "auto" }} />
+              <span className="mb-app-name" style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-muted)", letterSpacing: "-0.01em" }}>
+                Aula Virtual
+              </span>
             </div>
-            <div className="text-white leading-tight">
-              <div className="font-bold text-base tracking-tight">Aula Virtual</div>
-            </div>
-          </div>
 
-          <div className="flex items-center gap-2 flex-wrap">
-            {currentUser && (
-              <div className="flex items-center gap-2 rounded-full pl-1 pr-3 py-1" style={{ backgroundColor: "rgba(255,255,255,0.15)" }}>
-                <Avatar name={currentUser} size={26} />
-                <span className="text-xs font-semibold text-white">{currentUser}</span>
-                <button onClick={logout} title="Cerrar sesión" className="text-white opacity-80 hover:opacity-100">
-                  <LogOut size={13} />
-                </button>
-              </div>
-            )}
-            {isAdmin && (
-              <div className="flex items-center gap-1.5 rounded-full pl-2.5 pr-2.5 py-1" style={{ backgroundColor: "white" }}>
-                <ShieldCheck size={13} style={{ color: BRAND.red }} />
-                <span className="text-xs font-bold" style={{ color: BRAND.red }}>
-                  Administrador
-                </span>
-                <button onClick={logoutAdmin} title="Salir del modo administrador" style={{ color: BRAND.red }} className="opacity-70 hover:opacity-100">
-                  <LogOut size={12} />
-                </button>
-              </div>
-            )}
-            {isAdmin && !currentUser && (
-              <select
-                value=""
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  setCurrentUser(e.target.value);
-                  const assignedIds = courses.filter((c) => isAssignedToUser(c, e.target.value, groups)).map((c) => c.id);
-                  ensureCompletionsForCourses(assignedIds);
-                }}
-                className="text-xs rounded-full px-2.5 py-1.5 border-0 font-medium"
-                style={{ backgroundColor: "rgba(255,255,255,0.15)", color: "white" }}
-              >
-                <option value="" style={{ color: BRAND.ink }}>
-                  Ver como empleado...
-                </option>
-                {employees.map((e) => (
-                  <option key={e.name} value={e.name} style={{ color: BRAND.ink }}>
-                    {e.name}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-        </div>
+            {/* Nav tabs */}
+            <nav style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto", marginRight: 8, flexShrink: 1, overflowX: "auto" }}>
+              {[
+                { id: "dashboard", label: "Inicio", icon: Home },
+                ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
+                { id: "catalog", label: "Catálogo", icon: LayoutGrid },
+                ...(isAdmin ? [{ id: "admin", label: "Admin", icon: Settings }] : []),
+              ].map((t) => {
+                const active = view === t.id || (view === "course" && t.id === "catalog");
+                return (
+                  <button
+                    key={t.id}
+                    className="mb-nav-btn"
+                    onClick={() => {
+                      if (t.id === "catalog" && view !== "course") setSelectedCatalogCategory(null);
+                      setView(t.id);
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+                      padding: "6px 14px", borderRadius: "var(--radius-md)",
+                      fontSize: "var(--text-sm)", fontWeight: active ? 600 : 500,
+                      color: active ? "var(--brand)" : "var(--text-secondary)",
+                      backgroundColor: active ? "var(--brand-soft)" : "transparent",
+                      border: "none", cursor: "pointer",
+                      transition: "all var(--dur-fast) var(--ease-out)",
+                    }}
+                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.backgroundColor = "var(--bg-inset)"; }}
+                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.backgroundColor = "transparent"; }}
+                  >
+                    <t.icon size={16} />
+                    <span className="mb-nav-label">{t.label}</span>
+                    {!!t.count && (
+                      <span style={{
+                        display: "inline-flex", alignItems: "center", justifyContent: "center",
+                        minWidth: 18, height: 18, padding: "0 5px",
+                        borderRadius: "var(--radius-full)", fontSize: 10, fontWeight: 700,
+                        backgroundColor: "var(--danger)", color: "var(--text-inverse)",
+                      }}>
+                        {t.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
 
-        <div className="max-w-5xl mx-auto px-4 flex gap-1">
-          {[
-            { id: "dashboard", label: "Inicio", icon: Home },
-            ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
-            { id: "catalog", label: "Catálogo", icon: LayoutGrid },
-            ...(isAdmin ? [{ id: "admin", label: "Administración", icon: Settings }] : []),
-          ].map((t) => (
-            <button
-              key={t.id}
-              onClick={() => {
-                if (t.id === "catalog" && view !== "course") setSelectedCatalogCategory(null);
-                setView(t.id);
-              }}
-              className="relative flex items-center gap-1.5 text-sm font-semibold px-3 py-2 rounded-t-md transition-all duration-200"
-              style={{
-                backgroundColor: view === t.id || (view === "course" && t.id === "catalog") ? BRAND.cream : "transparent",
-                color: view === t.id || (view === "course" && t.id === "catalog") ? BRAND.red : "rgba(255,255,255,0.85)",
-              }}
-            >
-              <t.icon size={14} />
-              {t.label}
-              {!!t.count && (
-                <span
-                  className="inline-flex items-center justify-center rounded-full text-white font-bold"
-                  style={{ backgroundColor: "#E9312B", fontSize: 10, minWidth: 16, height: 16, padding: "0 4px" }}
-                >
-                  {t.count}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="max-w-5xl mx-auto px-4 py-6">
-        {storageError && (
-          <div
-            className="mb-5 rounded-lg border px-4 py-3 text-sm flex items-start gap-2 justify-between"
-            style={{ borderColor: "#EF444455", backgroundColor: "#FEE2E2", color: "#991B1B" }}
-          >
-            <div className="flex items-start gap-2">
-              <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" />
-              <div>
-                <div className="font-semibold">No se ha podido guardar correctamente.</div>
-                <div className="text-xs mt-0.5 opacity-90">{storageError}</div>
-                <div className="text-xs mt-1 opacity-90">
-                  Es probable que sea un permiso de Supabase (revisa las políticas de la tabla app_storage) o de conexión. Tu cambio puede no haberse guardado — repítelo cuando esté resuelto.
+            {/* User area */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+              {currentUser && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px 4px 4px", borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)" }}>
+                  <Avatar name={currentUser} size={24} />
+                  <span className="mb-user-name" style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{currentUser.split(" ")[0]}</span>
+                  <button onClick={logout} title="Cerrar sesión" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex", padding: 2 }}>
+                    <LogOut size={13} />
+                  </button>
                 </div>
-              </div>
+              )}
+              {isAdmin && (
+                <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--brand-soft)" }}>
+                  <ShieldCheck size={13} style={{ color: "var(--brand)" }} />
+                  <span className="mb-admin-label" style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)" }}>Admin</span>
+                  <button onClick={logoutAdmin} title="Salir" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--brand)", display: "flex", padding: 2, opacity: 0.7 }}>
+                    <LogOut size={12} />
+                  </button>
+                </div>
+              )}
+              {isAdmin && !currentUser && (
+                <select
+                  className="mb-view-as-select"
+                  value=""
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    setCurrentUser(e.target.value);
+                    const assignedIds = courses.filter((c) => isAssignedToUser(c, e.target.value, groups)).map((c) => c.id);
+                    ensureCompletionsForCourses(assignedIds);
+                  }}
+                  style={{ fontSize: "var(--text-xs)", padding: "4px 8px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", backgroundColor: "var(--bg-card)", color: "var(--text-secondary)", maxWidth: 160 }}
+                >
+                  <option value="">Ver como empleado…</option>
+                  {employees.map((e) => (
+                    <option key={e.name} value={e.name}>{e.name}</option>
+                  ))}
+                </select>
+              )}
             </div>
-            <button onClick={() => setStorageError("")} className="flex-shrink-0" style={{ color: "#991B1B" }}>
+          </div>
+        </div>
+      </header>
+
+      {/* ── MAIN CONTENT ── */}
+      <main style={{ maxWidth: 960, margin: "0 auto", padding: "var(--sp-6) var(--sp-4) var(--sp-12)" }}>
+        {storageError && (
+          <div style={{
+            marginBottom: "var(--sp-5)", padding: "var(--sp-3) var(--sp-4)",
+            borderRadius: "var(--radius-md)", border: "1px solid #EF444444",
+            backgroundColor: "var(--danger-soft)", color: "var(--danger-text)",
+            fontSize: "var(--text-sm)", display: "flex", alignItems: "flex-start", gap: 8,
+          }}>
+            <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600 }}>No se ha podido guardar.</div>
+              <div style={{ fontSize: "var(--text-xs)", marginTop: 2, opacity: 0.9 }}>{storageError}</div>
+            </div>
+            <button onClick={() => setStorageError("")} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--danger-text)", padding: 2 }}>
               <X size={16} />
             </button>
           </div>
@@ -1871,11 +1868,13 @@ export default function AulaVirtualMB() {
             onSaveCourse={saveCourse}
             onDeleteCourse={deleteCourse}
             onAddNews={addNews}
+            onUpdateNews={updateNews}
             onDeleteNews={deleteNews}
             onAddEmployee={addEmployee}
             onRemoveEmployee={removeEmployee}
             onResetEmployeePassword={resetEmployeePassword}
             onUpdateEmployeeEmail={updateEmployeeEmail}
+            onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
             onDeleteGroup={deleteGroup}
@@ -1886,127 +1885,229 @@ export default function AulaVirtualMB() {
             onImportBackup={importBackup}
           />
         )}
-      </div>
+      </main>
     </div>
   );
 }
 
 /* ---------- Vistas ---------- */
 
-function SectionTitle({ icon: Icon, children }) {
+
+/* ════════════════════════════════════════════════════════════════
+   DESIGN SYSTEM — COMPONENTES VISUALES
+   Tokens: ver index.css (:root)
+   ════════════════════════════════════════════════════════════════ */
+
+const DS = {
+  card: {
+    backgroundColor: "var(--bg-card)",
+    borderRadius: "var(--radius-lg)",
+    border: "1px solid var(--border)",
+    overflow: "hidden",
+  },
+  cardHover: {
+    boxShadow: "var(--shadow-md)",
+    borderColor: "var(--border-strong)",
+  },
+};
+
+function SectionTitle({ icon: Icon, children, extra }) {
   return (
-    <div className="flex items-center gap-2 mb-3">
-      <Icon size={17} style={{ color: BRAND.red }} />
-      <h2 className="font-bold text-base" style={{ color: BRAND.ink }}>
-        {children}
-      </h2>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--sp-4)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+        {Icon && <Icon size={16} style={{ color: "var(--text-muted)" }} />}
+        <h2 style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>
+          {children}
+        </h2>
+      </div>
+      {extra || null}
     </div>
+  );
+}
+
+function StatusPill({ icon: Icon, label, variant }) {
+  const styles = {
+    success: { bg: "var(--success-soft)", color: "var(--success-text)" },
+    warning: { bg: "var(--warning-soft)", color: "var(--warning-text)" },
+    danger: { bg: "var(--danger-soft)", color: "var(--danger-text)" },
+    neutral: { bg: "var(--bg-inset)", color: "var(--text-secondary)" },
+  };
+  const s = styles[variant] || styles.neutral;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      fontSize: "var(--text-xs)", fontWeight: 500,
+      padding: "3px 10px", borderRadius: "var(--radius-full)",
+      backgroundColor: s.bg, color: s.color,
+    }}>
+      {Icon && <Icon size={12} />}
+      {label}
+    </span>
   );
 }
 
 function CourseCard({ course, status, onOpen }) {
   const meta = categoryMeta(course.category);
+  const completed = status === "completada";
+  const days = course.deadline ? daysUntil(course.deadline) : null;
+  const isOverdue = days !== null && days < 0 && !completed;
+  const isDueSoon = days !== null && days >= 0 && days <= 3 && !completed;
+
   return (
     <button
       onClick={onOpen}
-      className="text-left w-full rounded-xl border bg-white p-4 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 flex flex-col gap-2"
-      style={{ borderColor: "#00000012", borderLeftWidth: 3, borderLeftColor: status === "completada" ? "#22C55E" : meta.color }}
+      style={{
+        ...DS.card,
+        textAlign: "left", width: "100%", cursor: "pointer",
+        display: "flex", flexDirection: "column",
+        transition: "all var(--dur-base) var(--ease-out)",
+        padding: 0,
+      }}
+      onMouseEnter={(e) => { Object.assign(e.currentTarget.style, { boxShadow: "var(--shadow-md)", transform: "translateY(-2px)", borderColor: "var(--border-strong)" }); }}
+      onMouseLeave={(e) => { Object.assign(e.currentTarget.style, { boxShadow: "none", transform: "none", borderColor: "var(--border)" }); }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <CategoryTag id={course.category} small />
-        <DeadlineChip deadline={course.deadline} completed={status === "completada"} />
+      {/* Accent line */}
+      <div style={{ height: 3, backgroundColor: completed ? "var(--success)" : meta.color }} />
+
+      <div style={{ padding: "var(--sp-4)", display: "flex", flexDirection: "column", gap: "var(--sp-2)", flex: 1 }}>
+        {/* Category + deadline */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <CategoryTag id={course.category} small />
+          <DeadlineChip deadline={course.deadline} completed={completed} />
+        </div>
+
+        {/* Title */}
+        <div style={{ fontSize: "var(--text-base)", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.35 }}>
+          {course.title}
+        </div>
+
+        {/* Description */}
+        <div className="line-clamp-2" style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", lineHeight: 1.5 }}>
+          {course.description}
+        </div>
+
+        {/* Meta row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--text-muted)", marginTop: "auto", paddingTop: "var(--sp-2)", borderTop: "1px solid var(--border)" }}>
+          {course.videoUrl && <span style={{ display: "flex", alignItems: "center", gap: 3 }}><PlayCircle size={11} /> Vídeo</span>}
+          {(course.attachments || []).length > 0 && <span style={{ display: "flex", alignItems: "center", gap: 3 }}><FileText size={11} /> {course.attachments.length} doc{course.attachments.length > 1 ? "s" : ""}</span>}
+          <span>{course.testMode === "googleform" ? "Google Form" : `${(course.quiz || []).length} pregunta${(course.quiz || []).length === 1 ? "" : "s"}`}</span>
+        </div>
       </div>
-      <div className="font-bold text-sm leading-snug mt-1" style={{ color: BRAND.ink }}>
-        {course.title}
-      </div>
-      <div className="text-xs text-gray-500 line-clamp-2">{course.description}</div>
-      <div className="flex items-center gap-3 text-[11px] text-gray-400 mt-1">
-        {course.videoUrl && (
-          <span className="flex items-center gap-1">
-            <PlayCircle size={12} /> Vídeo
-          </span>
-        )}
-        {course.presentationUrl && (
-          <span className="flex items-center gap-1">
-            <FileText size={12} /> Presentación
-          </span>
-        )}
-        <span>
-          {course.testMode === "googleform" ? "Test en Google Form" : `${(course.quiz || []).length} pregunta${(course.quiz || []).length === 1 ? "" : "s"} de test`}
-        </span>
-      </div>
+
+      {/* Urgency footer */}
+      {(isOverdue || isDueSoon || completed) && (
+        <div style={{
+          padding: "var(--sp-2) var(--sp-4)", fontSize: "var(--text-xs)", fontWeight: 500,
+          display: "flex", alignItems: "center", gap: 6,
+          backgroundColor: isOverdue ? "var(--danger-soft)" : isDueSoon ? "var(--warning-soft)" : "var(--success-soft)",
+          color: isOverdue ? "var(--danger-text)" : isDueSoon ? "var(--warning-text)" : "var(--success-text)",
+        }}>
+          {isOverdue ? <AlertTriangle size={12} /> : isDueSoon ? <Clock size={12} /> : <CheckCircle2 size={12} />}
+          {isOverdue ? `Vencida hace ${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"}` : isDueSoon ? `Vence en ${days} día${days === 1 ? "" : "s"}` : "Completada"}
+        </div>
+      )}
     </button>
   );
 }
 
-function WelcomeHero({ currentUser, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges }) {
+/* ── HOME ── */
+
+function WelcomeBar({ currentUser, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level }) {
   if (!currentUser) return null;
+  const firstName = currentUser.split(" ")[0];
+  const hour = new Date().getHours();
+  const greeting = hour < 14 ? "Buenos días" : hour < 21 ? "Buenas tardes" : "Buenas noches";
 
   const overdueCount = pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) < 0).length;
   const allDone = assignedCountForUser > 0 && pendingForUser.length === 0;
   const noneAssigned = assignedCountForUser === 0;
 
-  let icon = Clock,
-    statusLine = `${pendingForUser.length} formación${pendingForUser.length === 1 ? "" : "es"} por completar.`,
-    bg = "#FAEEDA",
-    fg = "#633806",
-    ring = "#C9A227";
-  if (noneAssigned) {
-    icon = Home;
-    statusLine = "Todavía no tienes formaciones asignadas.";
-    bg = "#F1EFE8";
-    fg = "#5F5E5A";
-    ring = "#888780";
-  } else if (allDone) {
-    icon = CheckCircle2;
-    statusLine = "Estás al día con todo.";
-    bg = "#EAF3DE";
-    fg = "#27500A";
-    ring = "#639922";
-  } else if (overdueCount > 0) {
-    icon = AlertTriangle;
-    statusLine = `${overdueCount} vencida${overdueCount === 1 ? "" : "s"} de ${pendingForUser.length} pendiente${pendingForUser.length === 1 ? "" : "s"}.`;
-    bg = "#FCEBEB";
-    fg = "#791F1F";
-    ring = "#E9312B";
-  }
-  const Icon = icon;
-  const firstName = currentUser.split(" ")[0];
+  let statusVariant = "warning", statusIcon = Clock, statusLabel = `${pendingForUser.length} formación${pendingForUser.length === 1 ? "" : "es"} pendiente${pendingForUser.length === 1 ? "" : "s"}`;
+  if (noneAssigned) { statusVariant = "neutral"; statusIcon = Home; statusLabel = "Sin formaciones asignadas"; }
+  else if (allDone) { statusVariant = "success"; statusIcon = CheckCircle2; statusLabel = "Estás al día"; }
+  else if (overdueCount > 0) { statusVariant = "danger"; statusIcon = AlertTriangle; statusLabel = `${overdueCount} vencida${overdueCount === 1 ? "" : "s"}`; }
 
   return (
-    <div className="rounded-2xl p-6 shadow-sm" style={{ backgroundColor: bg }}>
-      <div className="flex items-center justify-between gap-5 flex-wrap">
-        <div className="flex items-center gap-3.5">
-          <Avatar name={currentUser} size={54} />
-          <div>
-            <div className="font-extrabold text-xl leading-tight" style={{ color: fg }}>
-              Hola, {firstName}
-            </div>
-            <div className="text-sm font-medium mt-0.5 flex items-center gap-1.5" style={{ color: fg, opacity: 0.9 }}>
-              <Icon size={14} />
-              {statusLine}
-            </div>
+    <div style={{ ...DS.card, padding: "var(--sp-5)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-4)", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+        <Avatar name={currentUser} size={44} />
+        <div>
+          <div style={{ fontSize: "var(--text-lg)", fontWeight: 600, color: "var(--text-primary)" }}>
+            {greeting}, {firstName}
+          </div>
+          <div style={{ marginTop: 4 }}>
+            <StatusPill icon={statusIcon} label={statusLabel} variant={statusVariant} />
           </div>
         </div>
-        {!noneAssigned && <ProgressRing percent={progressPercent} color={ring} label={`${completedForUser.length}/${assignedCountForUser} formaciones`} />}
       </div>
-
-      {!noneAssigned && (
-        <div className="flex items-center justify-between gap-4 flex-wrap mt-5 pt-4" style={{ borderTop: `1px solid ${shadeColor(bg, -0.06)}` }}>
-          <div className="flex items-center gap-2 bg-white rounded-xl px-3.5 py-2 shadow-sm">
-            <Trophy size={18} style={{ color: level.color }} />
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-5)" }}>
+        {!noneAssigned && (
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+            <Trophy size={16} style={{ color: level.color }} />
             <div>
-              <div className="text-xs font-bold" style={{ color: BRAND.ink }}>
-                {points} pts · Nivel {level.tier} · {level.name}
-              </div>
-              <div className="text-[10px] text-gray-400">
-                {level.nextMin != null ? `${level.nextMin - points} pts para el siguiente nivel` : "Nivel máximo alcanzado"}
-              </div>
+              <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-primary)" }}>{points} pts · {level.name}</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{level.nextMin != null ? `${level.nextMin - points} para subir` : "Máximo"}</div>
             </div>
           </div>
-          {badges.length > 0 && <BadgesRow badges={badges} />}
+        )}
+        {!noneAssigned && <ProgressRing percent={progressPercent} size={52} color="var(--brand)" label={`${completedForUser.length}/${assignedCountForUser}`} />}
+      </div>
+    </div>
+  );
+}
+
+function ContinueCard({ course, onOpen }) {
+  if (!course) return null;
+  const meta = categoryMeta(course.category);
+  const days = course.deadline ? daysUntil(course.deadline) : null;
+  return (
+    <div style={{ ...DS.card, padding: "var(--sp-5)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-4)", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-4)", flex: 1, minWidth: 200 }}>
+        <div style={{ width: 48, height: 48, borderRadius: "var(--radius-lg)", backgroundColor: `${meta.color}14`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <meta.icon size={22} style={{ color: meta.color }} />
         </div>
-      )}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text-muted)", marginBottom: 2 }}>Continúa con</div>
+          <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.3 }}>{course.title}</div>
+          {days !== null && days <= 3 && (
+            <div style={{ fontSize: 11, color: days < 0 ? "var(--danger)" : "var(--warning)", fontWeight: 500, marginTop: 3 }}>
+              {days < 0 ? `Vencida hace ${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"}` : `Vence en ${days} día${days === 1 ? "" : "s"}`}
+            </div>
+          )}
+        </div>
+      </div>
+      <button
+        onClick={onOpen}
+        style={{
+          padding: "8px 20px", borderRadius: "var(--radius-md)",
+          backgroundColor: "var(--brand)", color: "var(--text-inverse)",
+          border: "none", cursor: "pointer", fontSize: "var(--text-sm)",
+          fontWeight: 600, transition: "background var(--dur-fast) var(--ease-out)",
+          display: "flex", alignItems: "center", gap: 6,
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "var(--brand-hover)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "var(--brand)"; }}
+      >
+        Continuar <ChevronRight size={15} />
+      </button>
+    </div>
+  );
+}
+
+function QuickStats({ pending, completed, total, progressPercent }) {
+  const stats = [
+    { label: "Pendientes", value: pending, color: pending > 0 ? "var(--warning)" : "var(--text-muted)" },
+    { label: "Completadas", value: completed, color: "var(--success)" },
+    { label: "Progreso", value: `${progressPercent}%`, color: "var(--brand)" },
+  ];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "var(--sp-3)" }}>
+      {stats.map((s) => (
+        <div key={s.label} style={{ padding: "var(--sp-4)", borderRadius: "var(--radius-lg)", backgroundColor: "var(--bg-inset)", textAlign: "center" }}>
+          <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: s.color }}>{s.value}</div>
+          <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: 2 }}>{s.label}</div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -2014,15 +2115,19 @@ function WelcomeHero({ currentUser, pendingForUser, completedForUser, assignedCo
 function BadgesRow({ badges }) {
   if (!badges || badges.length === 0) return null;
   return (
-    <div className="flex flex-wrap gap-2">
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--sp-2)" }}>
       {badges.map((b) => {
         const Icon = b.icon || Award;
-        const { bg, text } = pillColors(BRAND.gold);
         return (
-          <div key={b.id} className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-sm" style={{ backgroundColor: bg, color: text }}>
-            <Icon size={13} />
+          <span key={b.id} style={{
+            display: "inline-flex", alignItems: "center", gap: 4,
+            fontSize: 11, fontWeight: 500, padding: "3px 10px",
+            borderRadius: "var(--radius-full)",
+            backgroundColor: "var(--warning-soft)", color: "var(--warning-text)",
+          }}>
+            <Icon size={12} />
             {b.label}
-          </div>
+          </span>
         );
       })}
     </div>
@@ -2031,56 +2136,55 @@ function BadgesRow({ badges }) {
 
 function NewsCard({ item, featured, onOpen }) {
   const cat = item.linkType === "category" ? categoryMeta(item.linkId) : null;
-  const accentColor = cat ? cat.color : BRAND.teal;
-  const { bg: pillBg, text: pillText } = pillColors(accentColor);
-  const isNew = daysUntil(item.date) != null && Math.abs(daysUntil(item.date)) <= 3 && daysUntil(item.date) <= 0;
+  const accentColor = cat ? cat.color : "var(--info)";
   const clickable = item.linkType === "course" || item.linkType === "category";
+  const daysDiff = daysUntil(item.date);
+  const isNew = daysDiff != null && Math.abs(daysDiff) <= 3;
   const Icon = cat ? cat.icon : Newspaper;
 
   return (
     <div
       onClick={clickable ? onOpen : undefined}
-      className={`bg-white rounded-2xl shadow-sm p-4 ${featured ? "sm:p-5" : ""} ${clickable ? "cursor-pointer hover:shadow-lg hover:-translate-y-0.5" : ""} transition-all duration-200`}
-      style={{ borderLeft: `5px solid ${accentColor}` }}
+      style={{
+        ...DS.card, cursor: clickable ? "pointer" : "default",
+        display: "flex", transition: "all var(--dur-base) var(--ease-out)",
+      }}
+      onMouseEnter={(e) => { if (clickable) Object.assign(e.currentTarget.style, DS.cardHover, { transform: "translateY(-1px)" }); }}
+      onMouseLeave={(e) => { if (clickable) Object.assign(e.currentTarget.style, { boxShadow: "none", transform: "none", borderColor: "var(--border)" }); }}
     >
-      <div className="flex items-start justify-between gap-2 flex-wrap mb-2">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {isNew && (
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ backgroundColor: "#EAF3DE", color: "#27500A" }}>
-              Nuevo
+      <div style={{ width: 4, flexShrink: 0, backgroundColor: accentColor, borderRadius: "var(--radius-lg) 0 0 var(--radius-lg)" }} />
+      <div style={{ padding: featured ? "var(--sp-5)" : "var(--sp-4)", flex: 1 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: "var(--sp-2)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {isNew && <StatusPill label="Nuevo" variant="success" />}
+            <span style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
+              <Icon size={11} /> {cat ? cat.label : "General"}
             </span>
-          )}
-          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: pillBg, color: pillText }}>
-            <Icon size={11} />
-            {cat ? cat.label : "General"}
-          </span>
+          </div>
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{item.date}</span>
         </div>
-        <span className="text-[11px] text-gray-400 flex-shrink-0">{item.date}</span>
-      </div>
-      <div className={`font-bold leading-snug ${featured ? "text-base" : "text-sm"}`} style={{ color: BRAND.ink }}>
-        {item.title}
-      </div>
-      {featured && item.body && <div className="text-sm text-gray-500 mt-1.5 leading-relaxed">{item.body}</div>}
-      {clickable && (
-        <div className="text-xs font-bold mt-2.5 flex items-center gap-1" style={{ color: BRAND.red }}>
-          {item.linkType === "course" ? "Ir a la formación" : "Ver campo"}
-          <ChevronRight size={13} />
+        <div style={{ fontSize: featured ? "var(--text-md)" : "var(--text-base)", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.35 }}>
+          {item.title}
         </div>
-      )}
+        {featured && item.body && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: 1.5, marginTop: "var(--sp-2)" }}>{item.body}</div>}
+        {clickable && (
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)", display: "flex", alignItems: "center", gap: 4, marginTop: "var(--sp-3)" }}>
+            {item.linkType === "course" ? "Ir a la formación" : "Ver campo"} <ChevronRight size={13} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 function NewsPanel({ news, onOpenNewsLink }) {
-  if (news.length === 0) {
-    return <div className="text-sm text-gray-400">Sin novedades por ahora.</div>;
-  }
+  if (news.length === 0) return null;
   const [featured, ...rest] = news;
   return (
-    <div className="space-y-3">
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
       <NewsCard item={featured} featured onOpen={() => onOpenNewsLink(featured)} />
       {rest.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-3)" }}>
           {rest.slice(0, 4).map((n) => (
             <NewsCard key={n.id} item={n} onOpen={() => onOpenNewsLink(n)} />
           ))}
@@ -2091,9 +2195,12 @@ function NewsPanel({ news, onOpenNewsLink }) {
 }
 
 function Dashboard({ currentUser, news, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges, onOpenCourse, onOpenNewsLink }) {
+  // Formación más urgente para "Continuar"
+  const continueTarget = pendingForUser.length > 0 ? pendingForUser[0] : null;
+
   return (
-    <div className="space-y-8">
-      <WelcomeHero
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
+      <WelcomeBar
         currentUser={currentUser}
         pendingForUser={pendingForUser}
         completedForUser={completedForUser}
@@ -2101,33 +2208,40 @@ function Dashboard({ currentUser, news, pendingForUser, completedForUser, assign
         progressPercent={progressPercent}
         points={points}
         level={level}
-        badges={badges}
       />
 
-      <div>
-        <SectionTitle icon={Newspaper}>Novedades</SectionTitle>
-        <NewsPanel news={news} onOpenNewsLink={onOpenNewsLink} />
-      </div>
+      {currentUser && continueTarget && (
+        <ContinueCard course={continueTarget} onOpen={() => onOpenCourse(continueTarget.id)} />
+      )}
 
-      {currentUser && (
+      {currentUser && assignedCountForUser > 0 && (
+        <QuickStats pending={pendingForUser.length} completed={completedForUser.length} total={assignedCountForUser} progressPercent={progressPercent} />
+      )}
+
+      {currentUser && badges.length > 0 && <BadgesRow badges={badges} />}
+
+      {currentUser && pendingForUser.length > 1 && (
         <div>
-          <SectionTitle icon={Clock}>Tus formaciones pendientes</SectionTitle>
-          {pendingForUser.length === 0 ? (
-            <div className="text-sm text-gray-400">No tienes formaciones pendientes. Al día.</div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {pendingForUser.map((c) => (
-                <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
-              ))}
-            </div>
-          )}
+          <SectionTitle icon={Clock}>Formaciones pendientes</SectionTitle>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+            {pendingForUser.slice(1).map((c) => (
+              <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {news.length > 0 && (
+        <div>
+          <SectionTitle icon={Newspaper}>Novedades</SectionTitle>
+          <NewsPanel news={news} onOpenNewsLink={onOpenNewsLink} />
         </div>
       )}
 
       {currentUser && completedForUser.length > 0 && (
         <div>
           <SectionTitle icon={CheckCircle2}>Completadas</SectionTitle>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)", opacity: 0.7 }}>
             {completedForUser.map((c) => (
               <CourseCard key={c.id} course={c} status="completada" onOpen={() => onOpenCourse(c.id)} />
             ))}
@@ -2143,58 +2257,59 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
 
   if (total === 0) {
     return (
-      <div className="flex flex-col items-center gap-3 py-16 text-center">
-        <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ backgroundColor: "#EAF3DE" }}>
-          <CheckCircle2 size={28} style={{ color: "#639922" }} />
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--sp-4)", padding: "var(--sp-16) 0", textAlign: "center" }}>
+        <div style={{ width: 56, height: 56, borderRadius: "var(--radius-full)", backgroundColor: "var(--success-soft)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <CheckCircle2 size={24} style={{ color: "var(--success)" }} />
         </div>
-        <div className="font-bold text-lg" style={{ color: BRAND.ink }}>
-          Sin alertas ahora mismo
+        <div>
+          <div style={{ fontSize: "var(--text-lg)", fontWeight: 600, color: "var(--text-primary)" }}>Sin alertas</div>
+          <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", maxWidth: 300, marginTop: "var(--sp-1)" }}>
+            Aquí aparecerá lo que esté vencido o a punto de vencer (3 días o menos).
+          </div>
         </div>
-        <div className="text-sm text-gray-400 max-w-xs">Aquí verás lo que esté vencido o a punto de vencer (3 días o menos).</div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-8">
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-8)" }}>
       {overdueForUser.length > 0 && (
         <div>
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: "#FCEBEB" }}>
-              <AlertTriangle size={16} style={{ color: "#E9312B" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", marginBottom: "var(--sp-4)" }}>
+            <div style={{ width: 32, height: 32, borderRadius: "var(--radius-md)", backgroundColor: "var(--danger-soft)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <AlertTriangle size={16} style={{ color: "var(--danger)" }} />
             </div>
-            <h2 className="font-extrabold text-lg" style={{ color: "#791F1F" }}>
-              Vencidas ({overdueForUser.length})
-            </h2>
+            <div>
+              <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--danger-text)" }}>Vencidas</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{overdueForUser.length} formación{overdueForUser.length === 1 ? "" : "es"} con el plazo pasado</div>
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {overdueForUser.map((c) => (
-              <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
-            ))}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+            {overdueForUser.map((c) => <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />)}
           </div>
         </div>
       )}
 
       {dueSoonForUser.length > 0 && (
         <div>
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: "#FAEEDA" }}>
-              <Clock size={16} style={{ color: "#C9A227" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", marginBottom: "var(--sp-4)" }}>
+            <div style={{ width: 32, height: 32, borderRadius: "var(--radius-md)", backgroundColor: "var(--warning-soft)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Clock size={16} style={{ color: "var(--warning)" }} />
             </div>
-            <h2 className="font-extrabold text-lg" style={{ color: "#633806" }}>
-              Vencen en 3 días o menos ({dueSoonForUser.length})
-            </h2>
+            <div>
+              <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--warning-text)" }}>Próximas a vencer</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{dueSoonForUser.length} formación{dueSoonForUser.length === 1 ? "" : "es"} con 3 días o menos</div>
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {dueSoonForUser.map((c) => (
-              <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
-            ))}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+            {dueSoonForUser.map((c) => <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />)}
           </div>
         </div>
       )}
     </div>
   );
 }
+
 
 function shadeColor(hex, percent) {
   const num = parseInt(hex.replace("#", ""), 16);
@@ -2220,22 +2335,23 @@ function CategoryBubble({ cat, onClick }) {
   return (
     <button
       onClick={onClick}
-      className="group relative overflow-hidden rounded-3xl flex flex-col items-center justify-center gap-3 shadow-md hover:shadow-2xl transition-all duration-300 hover:-translate-y-1.5 active:scale-[0.98]"
-      style={{ background: `linear-gradient(145deg, ${shadeColor(cat.color, 0.08)}, ${shadeColor(cat.color, -0.18)})`, minHeight: 190, padding: 24 }}
+      style={{
+        ...DS.card, cursor: "pointer", padding: "var(--sp-6)",
+        display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "var(--sp-3)",
+        transition: "all var(--dur-base) var(--ease-out)", textAlign: "left",
+      }}
+      onMouseEnter={(e) => Object.assign(e.currentTarget.style, { boxShadow: "var(--shadow-md)", borderColor: cat.color, transform: "translateY(-2px)" })}
+      onMouseLeave={(e) => Object.assign(e.currentTarget.style, { boxShadow: "none", borderColor: "var(--border)", transform: "none" })}
     >
-      <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-white opacity-10 pointer-events-none" />
-      <div className="absolute -bottom-10 -left-6 w-28 h-28 rounded-full bg-white opacity-10 pointer-events-none" />
-      <div
-        className="absolute top-3 left-3 flex items-center justify-center rounded-full font-extrabold text-white text-[11px]"
-        style={{ backgroundColor: "rgba(255,255,255,0.22)", width: 30, height: 30 }}
-      >
-        {cat.code}
+      <div style={{ width: 44, height: 44, borderRadius: "var(--radius-md)", backgroundColor: `${cat.color}14`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Icon size={22} style={{ color: cat.color }} />
       </div>
-      <div className="w-20 h-20 rounded-full flex items-center justify-center" style={{ backgroundColor: "rgba(255,255,255,0.22)" }}>
-        <Icon size={34} className="text-white" strokeWidth={1.75} />
+      <div>
+        <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.3 }}>{cat.label}</div>
       </div>
-      <div className="text-white font-extrabold text-lg text-center leading-tight px-2">{cat.label}</div>
-      <ChevronRight size={16} className="text-white opacity-0 group-hover:opacity-80 transition-opacity absolute bottom-3 right-3" />
+      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-xs)", fontWeight: 500, color: cat.color, marginTop: "auto" }}>
+        Ver formaciones <ChevronRight size={13} />
+      </div>
     </button>
   );
 }
@@ -2243,13 +2359,11 @@ function CategoryBubble({ cat, onClick }) {
 function CategoryPicker({ onSelectCategory }) {
   return (
     <div>
-      <div className="text-center mb-6">
-        <h2 className="font-extrabold text-xl" style={{ color: BRAND.ink }}>
-          ¿Qué quieres ver?
-        </h2>
-        <div className="text-sm text-gray-400 mt-1">Elige un campo para entrar en sus formaciones</div>
+      <div style={{ marginBottom: "var(--sp-5)" }}>
+        <h2 style={{ fontSize: "var(--text-xl)", fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>Catálogo</h2>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", marginTop: 2 }}>Elige un campo para ver sus formaciones</div>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--sp-4)" }}>
         {CATEGORIES.map((cat) => (
           <CategoryBubble key={cat.id} cat={cat} onClick={() => onSelectCategory(cat.id)} />
         ))}
@@ -2264,11 +2378,11 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
 
   if (visibleCourses.length === 0) {
     return (
-      <div className="flex flex-col items-center gap-2 py-14 text-center">
-        <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ backgroundColor: "#00000008" }}>
-          <LayoutGrid size={22} className="text-gray-300" />
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--sp-3)", padding: "var(--sp-16) 0", textAlign: "center" }}>
+        <div style={{ width: 48, height: 48, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <LayoutGrid size={20} style={{ color: "var(--text-muted)" }} />
         </div>
-        <div className="text-sm text-gray-400 max-w-xs">
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", maxWidth: 280 }}>
           {courses.length === 0 ? "Aún no hay formaciones. Añade la primera desde Administración." : "No tienes formaciones asignadas todavía."}
         </div>
       </div>
@@ -2286,29 +2400,27 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
   const CatIcon = cat.icon;
 
   return (
-    <div className="space-y-6">
-      <button onClick={() => onSelectCategory(null)} className="flex items-center gap-1 text-sm font-semibold" style={{ color: BRAND.red }}>
-        <ChevronLeft size={16} /> Volver a los campos
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
+      <button onClick={() => onSelectCategory(null)} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content" }}>
+        <ChevronLeft size={15} /> Catálogo
       </button>
 
-      <div className="flex items-center gap-3">
-        <div className="w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: cat.color }}>
-          <CatIcon size={22} className="text-white" />
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+        <div style={{ width: 40, height: 40, borderRadius: "var(--radius-md)", backgroundColor: `${cat.color}14`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <CatIcon size={19} style={{ color: cat.color }} />
         </div>
         <div>
-          <h2 className="font-extrabold text-xl leading-tight" style={{ color: BRAND.ink }}>
-            {cat.label}
-          </h2>
-          <div className="text-xs text-gray-400">Pendientes por plazo más urgente primero</div>
+          <h2 style={{ fontSize: "var(--text-xl)", fontWeight: 600, color: "var(--text-primary)", margin: 0, lineHeight: 1.3 }}>{cat.label}</h2>
+          <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Ordenadas por plazo más urgente</div>
         </div>
       </div>
 
       {pendingCourses.length === 0 ? (
-        <div className="text-sm text-gray-400 py-4">
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", padding: "var(--sp-4) 0" }}>
           {completedCourses.length > 0 ? "No tienes formaciones pendientes en este campo. Al día." : "Todavía no hay formaciones en este campo."}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
           {pendingCourses.map((c) => (
             <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} />
           ))}
@@ -2317,15 +2429,15 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
 
       {currentUser && completedCourses.length > 0 && (
         <div>
-          <button onClick={() => setShowCompleted((v) => !v)} className="flex items-center gap-2 mb-3 w-full text-left">
-            <span className="inline-flex items-center justify-center rounded-md font-bold text-white" style={{ backgroundColor: "#22C55E", width: 24, height: 24 }}>
-              <CheckCircle2 size={14} />
-            </span>
-            <h2 className="font-bold text-base text-gray-500">Completadas ({completedCourses.length})</h2>
-            {showCompleted ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
+          <button onClick={() => setShowCompleted((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "var(--sp-3)", width: "100%", textAlign: "left", border: "none", background: "none", cursor: "pointer", padding: 0 }}>
+            <div style={{ width: 24, height: 24, borderRadius: "var(--radius-md)", backgroundColor: "var(--success-soft)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <CheckCircle2 size={13} style={{ color: "var(--success)" }} />
+            </div>
+            <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-secondary)" }}>Completadas ({completedCourses.length})</span>
+            {showCompleted ? <ChevronUp size={14} style={{ color: "var(--text-muted)" }} /> : <ChevronDown size={14} style={{ color: "var(--text-muted)" }} />}
           </button>
           {showCompleted && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 opacity-70">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)", opacity: 0.7 }}>
               {completedCourses.map((c) => (
                 <CourseCard key={c.id} course={c} status="completada" onOpen={() => onOpenCourse(c.id)} />
               ))}
@@ -2345,54 +2457,48 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
   const isGoogleForm = course.testMode === "googleform" && course.googleFormUrl;
 
   return (
-    <div className="space-y-5">
-      <button onClick={onBack} className="flex items-center gap-1 text-sm font-semibold" style={{ color: BRAND.red }}>
-        <ChevronLeft size={16} /> Volver al catálogo
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)", maxWidth: 760 }}>
+      <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content" }}>
+        <ChevronLeft size={15} /> Volver al catálogo
       </button>
 
-      <div className="flex items-start justify-between gap-3 flex-wrap">
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "var(--sp-3)", flexWrap: "wrap" }}>
         <div>
           <CategoryTag id={course.category} />
-          <h1 className="font-bold text-xl mt-2" style={{ color: BRAND.ink }}>
+          <h1 style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--text-primary)", marginTop: "var(--sp-2)", marginBottom: "var(--sp-1)", lineHeight: 1.3 }}>
             {course.title}
           </h1>
-          <p className="text-sm text-gray-600 mt-1 max-w-2xl">{course.description}</p>
+          <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", maxWidth: 640, margin: 0, lineHeight: 1.5 }}>{course.description}</p>
         </div>
         <DeadlineChip deadline={course.deadline} completed={status === "completada"} />
       </div>
 
       {course.videoUrl && (
         <div>
-          <div className="text-xs font-semibold text-gray-500 mb-1.5 flex items-center gap-1.5">
-            <PlayCircle size={14} /> Vídeo de la formación
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <PlayCircle size={14} /> VÍDEO DE LA FORMACIÓN
           </div>
-          <div className="rounded-lg overflow-hidden bg-black aspect-video">
-            <iframe src={embed} className="w-full h-full" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title={course.title} />
+          <div style={{ borderRadius: "var(--radius-lg)", overflow: "hidden", backgroundColor: "#000", aspectRatio: "16/9" }}>
+            <iframe src={embed} style={{ width: "100%", height: "100%", border: "none" }} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title={course.title} />
           </div>
-          <a
-            href={course.videoUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 text-sm font-semibold mt-2"
-            style={{ color: BRAND.blue }}
-          >
-            <PlayCircle size={14} /> Ver el vídeo directamente en su web de origen ↗
+          <a href={course.videoUrl} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--info)", marginTop: "var(--sp-2)" }}>
+            <PlayCircle size={14} /> Ver el vídeo en su web de origen ↗
           </a>
-          <div className="text-[11px] text-gray-400 mt-1">
-            Si el reproductor de arriba no carga o aparece bloqueado, usa este enlace — se abre en una pestaña aparte, fuera del Aula Virtual.
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+            Si el reproductor no carga, usa este enlace — se abre en una pestaña aparte.
           </div>
         </div>
       )}
 
       {course.presentationUrl && (
         <div>
-          <div className="text-xs font-semibold text-gray-500 mb-1.5 flex items-center gap-1.5">
-            <FileText size={14} /> Presentación / material
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <FileText size={14} /> PRESENTACIÓN / MATERIAL
           </div>
-          <div className="rounded-lg overflow-hidden border bg-white" style={{ borderColor: "#00000012" }}>
-            <iframe src={course.presentationUrl} className="w-full" style={{ height: 420 }} title={`${course.title}-material`} />
+          <div style={{ ...DS.card }}>
+            <iframe src={course.presentationUrl} style={{ width: "100%", height: 420, border: "none", display: "block" }} title={`${course.title}-material`} />
           </div>
-          <a href={course.presentationUrl} target="_blank" rel="noreferrer" className="text-xs font-semibold mt-1.5 inline-block" style={{ color: BRAND.blue }}>
+          <a href={course.presentationUrl} target="_blank" rel="noreferrer" style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--info)", marginTop: "var(--sp-2)", display: "inline-block" }}>
             Abrir en una pestaña nueva ↗
           </a>
         </div>
@@ -2400,10 +2506,10 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
 
       {course.attachments && course.attachments.length > 0 && (
         <div>
-          <div className="text-xs font-semibold text-gray-500 mb-1.5 flex items-center gap-1.5">
-            <FileText size={14} /> Documentos adjuntos
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <FileText size={14} /> DOCUMENTOS ADJUNTOS
           </div>
-          <div className="space-y-2">
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
             {course.attachments.map((att) => (
               <AttachmentViewer key={att.id} att={att} />
             ))}
@@ -2412,33 +2518,30 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
       )}
 
       {isGoogleForm && (
-        <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
-          <div className="font-bold text-sm mb-1 flex items-center gap-2" style={{ color: BRAND.ink }}>
-            <ClipboardList size={16} style={{ color: BRAND.red }} />
+        <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
+          <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: 4, display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
+            <ClipboardList size={16} style={{ color: "var(--brand)" }} />
             Test final (Google Form)
           </div>
-          <div className="text-xs text-gray-500 mb-3">
-            Este test se completa en el formulario de abajo. La app no puede comprobar tu respuesta automáticamente — cuando termines, indícalo con el botón.
+          <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: "var(--sp-3)" }}>
+            Este test se completa en el formulario de abajo. Cuando termines, indícalo con el botón.
           </div>
-          <div className="rounded-lg overflow-hidden border mb-2" style={{ borderColor: "#00000012" }}>
-            <iframe src={getFormEmbedUrl(course.googleFormUrl)} className="w-full" style={{ height: 480 }} title={`${course.title}-form`}>
+          <div style={{ borderRadius: "var(--radius-md)", overflow: "hidden", border: "1px solid var(--border)", marginBottom: "var(--sp-2)" }}>
+            <iframe src={getFormEmbedUrl(course.googleFormUrl)} style={{ width: "100%", height: 480, border: "none", display: "block" }} title={`${course.title}-form`}>
               Cargando…
             </iframe>
           </div>
-          <a href={course.googleFormUrl} target="_blank" rel="noreferrer" className="text-xs font-semibold inline-block mb-3" style={{ color: BRAND.blue }}>
+          <a href={course.googleFormUrl} target="_blank" rel="noreferrer" style={{ fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--info)", display: "inline-block", marginBottom: "var(--sp-3)" }}>
             Abrir el formulario en una pestaña nueva ↗
           </a>
           <div>
             {status === "completada" ? (
-              <div className="text-sm text-green-700 font-semibold flex items-center gap-1.5">
-                <CheckCircle2 size={16} /> Marcado como completado {record?.completedAt ? `el ${record.completedAt}` : ""}
-              </div>
+              <StatusPill icon={CheckCircle2} label={`Completado ${record?.completedAt ? `el ${record.completedAt}` : ""}`} variant="success" />
             ) : (
               <button
                 disabled={!currentUser}
                 onClick={onSelfReport}
-                className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 transition-all duration-150 active:scale-[0.98]"
-                style={{ backgroundColor: BRAND.red }}
+                style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !currentUser ? 0.4 : 1 }}
               >
                 Ya he completado el formulario
               </button>
@@ -2448,64 +2551,72 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
       )}
 
       {!isGoogleForm && quiz.length > 0 && (
-        <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
-          <div className="font-bold text-sm mb-3 flex items-center gap-2" style={{ color: BRAND.ink }}>
-            <ClipboardList size={16} style={{ color: BRAND.red }} />
+        <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
+          <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: "var(--sp-3)", display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
+            <ClipboardList size={16} style={{ color: "var(--brand)" }} />
             Test final {record?.attempts ? `· intento ${record.attempts + (quizResult ? 0 : 1)}` : ""}
           </div>
 
           {status === "completada" && !quizResult ? (
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="text-sm text-green-700 font-semibold flex items-center gap-1.5">
-                <CheckCircle2 size={16} /> Superado {record?.score != null ? `(${record.score}%)` : ""}
-              </div>
-              <button onClick={onRetry} className="text-xs font-semibold underline text-gray-500">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <StatusPill icon={CheckCircle2} label={`Superado ${record?.score != null ? `(${record.score}%)` : ""}`} variant="success" />
+              <button onClick={onRetry} style={{ fontSize: "var(--text-xs)", fontWeight: 500, textDecoration: "underline", color: "var(--text-muted)", border: "none", background: "none", cursor: "pointer" }}>
                 Repetir de todas formas
               </button>
             </div>
           ) : quizResult ? (
-            <div className="space-y-3">
-              <div
-                className="rounded-lg p-3 text-sm font-semibold flex items-center gap-2"
-                style={{ backgroundColor: quizResult.passed ? "#DCFCE7" : "#FEE2E2", color: quizResult.passed ? "#166534" : "#B91C1C" }}
-              >
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+              <div style={{
+                borderRadius: "var(--radius-md)", padding: "var(--sp-3)", fontSize: "var(--text-sm)", fontWeight: 600,
+                display: "flex", alignItems: "center", gap: 8,
+                backgroundColor: quizResult.passed ? "var(--success-soft)" : "var(--danger-soft)",
+                color: quizResult.passed ? "var(--success-text)" : "var(--danger-text)",
+              }}>
                 {quizResult.passed ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
                 {quizResult.passed
                   ? `Superado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%)`
                   : `No alcanzado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%). Necesitas ${course.passPct ?? 70}%.`}
               </div>
               {!quizResult.passed && (
-                <button onClick={onRetry} className="text-sm font-semibold rounded-md px-3 py-1.5 text-white transition-all duration-150 active:scale-[0.98]" style={{ backgroundColor: BRAND.red }}>
+                <button onClick={onRetry} style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "6px 14px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content" }}>
                   Reintentar test
                 </button>
               )}
             </div>
           ) : (
-            <div className="space-y-4">
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
               {quiz.map((q, qi) => (
                 <div key={qi}>
-                  <div className="text-sm font-semibold mb-2">
+                  <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--sp-2)", color: "var(--text-primary)" }}>
                     {qi + 1}. {q.question}
                   </div>
-                  <div className="space-y-1.5">
-                    {q.options.map((opt, oi) => (
-                      <div
-                        key={oi}
-                        onClick={() => setQuizAnswers((prev) => ({ ...prev, [qi]: oi }))}
-                        className="flex items-center gap-2 text-sm rounded-md border px-3 py-2 cursor-pointer transition"
-                        style={{ borderColor: quizAnswers[qi] === oi ? BRAND.red : "#00000018", backgroundColor: quizAnswers[qi] === oi ? `${BRAND.red}10` : "white" }}
-                      >
-                        <span
-                          className="w-3.5 h-3.5 rounded-full border flex-shrink-0"
-                          style={{ borderColor: quizAnswers[qi] === oi ? BRAND.red : "#00000030", backgroundColor: quizAnswers[qi] === oi ? BRAND.red : "transparent" }}
-                        />
-                        {opt}
-                      </div>
-                    ))}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {q.options.map((opt, oi) => {
+                      const selected = quizAnswers[qi] === oi;
+                      return (
+                        <div
+                          key={oi}
+                          onClick={() => setQuizAnswers((prev) => ({ ...prev, [qi]: oi }))}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 8, fontSize: "var(--text-sm)",
+                            borderRadius: "var(--radius-md)", border: `1px solid ${selected ? "var(--brand)" : "var(--border)"}`,
+                            padding: "8px 12px", cursor: "pointer", transition: "all var(--dur-fast) var(--ease-out)",
+                            backgroundColor: selected ? "var(--brand-soft)" : "var(--bg-card)", color: "var(--text-primary)",
+                          }}
+                        >
+                          <span style={{ width: 14, height: 14, borderRadius: "var(--radius-full)", border: `1.5px solid ${selected ? "var(--brand)" : "var(--border-strong)"}`, backgroundColor: selected ? "var(--brand)" : "transparent", flexShrink: 0 }} />
+                          {opt}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
-              <button disabled={!allAnswered || !currentUser} onClick={onSubmitQuiz} className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 transition-all duration-150 active:scale-[0.98]" style={{ backgroundColor: BRAND.red }}>
+              <button
+                disabled={!allAnswered || !currentUser}
+                onClick={onSubmitQuiz}
+                style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: (!allAnswered || !currentUser) ? 0.4 : 1, width: "fit-content" }}
+              >
                 Enviar test
               </button>
             </div>
@@ -2546,11 +2657,13 @@ function AdminPanel({
   onSaveCourse,
   onDeleteCourse,
   onAddNews,
+  onUpdateNews,
   onDeleteNews,
   onAddEmployee,
   onRemoveEmployee,
   onResetEmployeePassword,
   onUpdateEmployeeEmail,
+  onRenameEmployee,
   onImportEmployeesBulk,
   onAddGroup,
   onDeleteGroup,
@@ -2583,6 +2696,9 @@ function AdminPanel({
   const [newEmployeeName, setNewEmployeeName] = useState("");
   const [newEmployeeEmail, setNewEmployeeEmail] = useState("");
   const [editingEmailFor, setEditingEmailFor] = useState(null);
+  const [editingNameFor, setEditingNameFor] = useState(null);
+  const [editingNameValue, setEditingNameValue] = useState("");
+  const [renameError, setRenameError] = useState("");
   const [editingEmailValue, setEditingEmailValue] = useState("");
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [importPreviewRows, setImportPreviewRows] = useState(null);
@@ -2595,6 +2711,7 @@ function AdminPanel({
   const [newNewsBody, setNewNewsBody] = useState("");
   const [newNewsLinkType, setNewNewsLinkType] = useState("none");
   const [newNewsLinkId, setNewNewsLinkId] = useState("");
+  const [editingNewsId, setEditingNewsId] = useState(null);
   const [newGroupName, setNewGroupName] = useState("");
   const [exporting, setExporting] = useState(false);
   const [importPending, setImportPending] = useState(null);
@@ -2748,42 +2865,53 @@ function AdminPanel({
   }, [employees, courses, groups, completionsByCourse]);
 
   return (
-    <div className="space-y-5">
-      <div className="flex gap-2 flex-wrap">
-        {[
-          { id: "courses", label: "Formaciones" },
-          { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
-          { id: "news", label: "Novedades" },
-          { id: "employees", label: "Empleados" },
-          { id: "groups", label: "Grupos" },
-          { id: "seguimiento", label: "Seguimiento" },
-          { id: "notificaciones", label: "Notificaciones" },
-          { id: "backup", label: "Copia de seguridad" },
-        ].map((t) => (
-          <button
-            key={t.id}
-            onClick={() => {
-              if (t.id === "editor" && !draft.title && tab !== "editor") resetDraft();
-              setTab(t.id);
-            }}
-            className="text-sm font-semibold px-3 py-1.5 rounded-md"
-            style={{ backgroundColor: tab === t.id ? BRAND.red : "white", color: tab === t.id ? "white" : BRAND.ink, border: `1px solid ${tab === t.id ? BRAND.red : "#00000018"}` }}
-          >
-            {t.label}
-          </button>
-        ))}
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
+      <div>
+        <h1 style={{ fontSize: "var(--text-xl)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-4) 0" }}>Administración</h1>
+        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
+          {[
+            { id: "courses", label: "Formaciones" },
+            { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
+            { id: "news", label: "Novedades" },
+            { id: "employees", label: "Empleados" },
+            { id: "groups", label: "Grupos" },
+            { id: "seguimiento", label: "Seguimiento" },
+            { id: "notificaciones", label: "Notificaciones" },
+            { id: "backup", label: "Copia de seguridad" },
+          ].map((t) => {
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => {
+                  if (t.id === "editor" && !draft.title && tab !== "editor") resetDraft();
+                  setTab(t.id);
+                }}
+                style={{
+                  fontSize: "var(--text-sm)", fontWeight: active ? 600 : 500,
+                  padding: "10px 14px", whiteSpace: "nowrap", flexShrink: 0,
+                  color: active ? "var(--brand)" : "var(--text-muted)",
+                  background: "none", border: "none", cursor: "pointer",
+                  borderBottom: active ? "2px solid var(--brand)" : "2px solid transparent",
+                  marginBottom: -1, transition: "color var(--dur-fast) var(--ease-out)",
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {tab === "courses" && (
-        <div className="space-y-2">
-          <div className="flex gap-2 flex-wrap items-center mb-2">
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+          <div style={{ display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", alignItems: "center", marginBottom: "var(--sp-2)" }}>
             <button
               onClick={() => {
                 resetDraft();
                 setTab("editor");
               }}
-              className="flex items-center gap-1.5 text-sm font-bold rounded-md px-3 py-2 text-white"
-              style={{ backgroundColor: BRAND.red }}
+              style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer" }}
             >
               <Plus size={15} /> Nueva formación
             </button>
@@ -2796,26 +2924,25 @@ function AdminPanel({
                 setExamplesMsg(`Ejemplos actualizados (${added} formaciones/novedades). Si tenías progreso guardado en las versiones antiguas, se ha reiniciado.`);
                 setTimeout(() => setExamplesMsg(""), 6000);
               }}
-              className="flex items-center gap-1.5 text-sm font-semibold rounded-md px-3 py-2 border disabled:opacity-40"
-              style={{ borderColor: BRAND.red, color: BRAND.red }}
+              style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 500, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--brand)", backgroundColor: "var(--bg-card)", border: "1px solid var(--border)", cursor: "pointer", opacity: loadingExamples ? 0.5 : 1 }}
             >
               {loadingExamples && <Loader2 size={14} className="animate-spin" />}
-              Cargar / actualizar formaciones de ejemplo
+              Cargar / actualizar ejemplos
             </button>
-            {examplesMsg && <span className="text-xs text-gray-500">{examplesMsg}</span>}
+            {examplesMsg && <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{examplesMsg}</span>}
           </div>
-          {courses.length === 0 && <div className="text-sm text-gray-400">No hay formaciones todavía.</div>}
+          {courses.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay formaciones todavía.</div>}
           {courses.map((c) => (
-            <div key={c.id} className="flex items-center justify-between gap-3 rounded-lg border bg-white p-3" style={{ borderColor: "#00000012" }}>
-              <div className="flex items-center gap-2 min-w-0">
+            <div key={c.id} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "var(--sp-3)", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
                 <CategoryTag id={c.category} small />
-                <div className="font-semibold text-sm truncate">{c.title}</div>
+                <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <button onClick={() => loadDraft(c)} className="text-xs font-semibold px-2 py-1 rounded" style={{ color: BRAND.blue }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                <button onClick={() => loadDraft(c)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--info)", background: "none", border: "none", cursor: "pointer" }}>
                   Editar
                 </button>
-                <button onClick={() => onDeleteCourse(c.id)} className="text-xs font-semibold px-2 py-1 rounded text-red-600 flex items-center gap-1">
+                <button onClick={() => onDeleteCourse(c.id)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--danger)", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                   <Trash2 size={13} /> Eliminar
                 </button>
               </div>
@@ -3040,6 +3167,11 @@ function AdminPanel({
       {tab === "news" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 space-y-3 shadow-sm" style={{ borderColor: "#00000012" }}>
+            {editingNewsId && (
+              <div className="text-xs font-semibold rounded-md px-3 py-2" style={{ backgroundColor: "var(--info-soft)", color: "var(--info-text)" }}>
+                Editando novedad existente
+              </div>
+            )}
             <TextInput label="Título de la novedad" value={newNewsTitle} onChange={setNewNewsTitle} placeholder="Ej. Nueva formación disponible" />
             <label className="block text-xs font-semibold text-gray-500 mb-1">
               Contenido
@@ -3093,27 +3225,48 @@ function AdminPanel({
               )}
             </div>
 
-            <button
-              disabled={!newNewsTitle.trim() || (newNewsLinkType !== "none" && !newNewsLinkId)}
-              onClick={() => {
-                onAddNews({
-                  id: uid(),
-                  date: todayISO(),
-                  title: newNewsTitle,
-                  body: newNewsBody,
-                  linkType: newNewsLinkType === "none" ? null : newNewsLinkType,
-                  linkId: newNewsLinkType === "none" ? null : newNewsLinkId,
-                });
-                setNewNewsTitle("");
-                setNewNewsBody("");
-                setNewNewsLinkType("none");
-                setNewNewsLinkId("");
-              }}
-              className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40"
-              style={{ backgroundColor: BRAND.red }}
-            >
-              Publicar novedad
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                disabled={!newNewsTitle.trim() || (newNewsLinkType !== "none" && !newNewsLinkId)}
+                onClick={() => {
+                  const fields = {
+                    title: newNewsTitle,
+                    body: newNewsBody,
+                    linkType: newNewsLinkType === "none" ? null : newNewsLinkType,
+                    linkId: newNewsLinkType === "none" ? null : newNewsLinkId,
+                  };
+                  if (editingNewsId) {
+                    onUpdateNews(editingNewsId, fields);
+                    setEditingNewsId(null);
+                  } else {
+                    onAddNews({ id: uid(), date: todayISO(), ...fields });
+                  }
+                  setNewNewsTitle("");
+                  setNewNewsBody("");
+                  setNewNewsLinkType("none");
+                  setNewNewsLinkId("");
+                }}
+                className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40"
+                style={{ backgroundColor: BRAND.red }}
+              >
+                {editingNewsId ? "Guardar cambios" : "Publicar novedad"}
+              </button>
+              {editingNewsId && (
+                <button
+                  onClick={() => {
+                    setEditingNewsId(null);
+                    setNewNewsTitle("");
+                    setNewNewsBody("");
+                    setNewNewsLinkType("none");
+                    setNewNewsLinkId("");
+                  }}
+                  className="text-sm font-semibold px-3 py-2"
+                  style={{ color: BRAND.ink }}
+                >
+                  Cancelar
+                </button>
+              )}
+            </div>
           </div>
           <div className="space-y-2">
             {news.map((n) => {
@@ -3130,9 +3283,24 @@ function AdminPanel({
                       {linkedCategory && <span className="text-blue-600 font-semibold">→ {linkedCategory.label}</span>}
                     </div>
                   </div>
-                  <button onClick={() => onDeleteNews(n.id)} className="text-red-500 flex-shrink-0">
-                    <Trash2 size={14} />
-                  </button>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <button
+                      onClick={() => {
+                        setEditingNewsId(n.id);
+                        setNewNewsTitle(n.title);
+                        setNewNewsBody(n.body || "");
+                        setNewNewsLinkType(n.linkType || "none");
+                        setNewNewsLinkId(n.linkId || "");
+                      }}
+                      className="text-xs font-semibold"
+                      style={{ color: BRAND.blue }}
+                    >
+                      Editar
+                    </button>
+                    <button onClick={() => onDeleteNews(n.id)} className="text-red-500">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -3297,7 +3465,57 @@ function AdminPanel({
                   <div className="flex items-center gap-2 min-w-0">
                     <Avatar name={e.name} size={30} />
                     <div className="min-w-0">
-                      <div className="text-sm font-medium truncate">{e.name}</div>
+                      {editingNameFor === e.name ? (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            value={editingNameValue}
+                            onChange={(ev) => {
+                              setEditingNameValue(ev.target.value);
+                              setRenameError("");
+                            }}
+                            onKeyDown={async (ev) => {
+                              if (ev.key === "Enter") {
+                                const res = await onRenameEmployee(e.name, editingNameValue);
+                                if (res.ok) setEditingNameFor(null);
+                                else setRenameError(res.error);
+                              }
+                            }}
+                            className="text-sm rounded-md border px-2 py-1 w-40"
+                            style={{ borderColor: "#00000020" }}
+                            autoFocus
+                          />
+                          <button
+                            onClick={async () => {
+                              const res = await onRenameEmployee(e.name, editingNameValue);
+                              if (res.ok) setEditingNameFor(null);
+                              else setRenameError(res.error);
+                            }}
+                            className="text-[11px] font-semibold"
+                            style={{ color: BRAND.blue }}
+                          >
+                            Guardar
+                          </button>
+                          <button onClick={() => { setEditingNameFor(null); setRenameError(""); }} className="text-[11px] text-gray-400">
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <div className="text-sm font-medium truncate">{e.name}</div>
+                          <button
+                            onClick={() => {
+                              setEditingNameFor(e.name);
+                              setEditingNameValue(e.name);
+                              setRenameError("");
+                            }}
+                            title="Cambiar nombre"
+                            className="text-gray-300 hover:text-gray-500 flex-shrink-0"
+                          >
+                            <Settings size={11} />
+                          </button>
+                        </div>
+                      )}
+                      {renameError && editingNameFor === e.name && <div className="text-[10px] text-red-600 mt-0.5">{renameError}</div>}
                       {editingEmailFor === e.name ? (
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <input
@@ -3326,7 +3544,7 @@ function AdminPanel({
                           }}
                           className="text-[11px] text-gray-400 hover:underline truncate block"
                         >
-                          {e.email || "Sin email — añadir"}
+                          {e.email || "Sin email — añadir"} <span style={{ opacity: 0.6 }}>(editar)</span>
                         </button>
                       )}
                     </div>
