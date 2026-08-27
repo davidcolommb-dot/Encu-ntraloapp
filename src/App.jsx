@@ -1893,48 +1893,77 @@ export default function AulaVirtualMB() {
 
 /* ---------- Vistas ---------- */
 
-function SectionTitle({ icon: Icon, children }) {
+function SectionTitle({ icon: Icon, children, extra }) {
   return (
-    <div className="flex items-center gap-2 mb-3">
-      <Icon size={17} style={{ color: BRAND.red }} />
-      <h2 className="font-bold text-base" style={{ color: BRAND.ink }}>
-        {children}
-      </h2>
+    <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center gap-2.5">
+        <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${BRAND.red}12` }}>
+          <Icon size={16} style={{ color: BRAND.red }} />
+        </div>
+        <h2 className="font-extrabold text-lg" style={{ color: BRAND.ink }}>
+          {children}
+        </h2>
+      </div>
+      {extra || null}
     </div>
   );
 }
 
 function CourseCard({ course, status, onOpen }) {
   const meta = categoryMeta(course.category);
+  const { bg: pillBg, text: pillText } = pillColors(meta.color);
+  const completed = status === "completada";
+  const accentColor = completed ? "#22C55E" : meta.color;
+  const days = course.deadline ? daysUntil(course.deadline) : null;
+  const isOverdue = days !== null && days < 0 && !completed;
+  const isDueSoon = days !== null && days >= 0 && days <= 3 && !completed;
+
   return (
     <button
       onClick={onOpen}
-      className="text-left w-full rounded-xl border bg-white p-4 shadow-sm hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200 flex flex-col gap-2"
-      style={{ borderColor: "#00000012", borderLeftWidth: 3, borderLeftColor: status === "completada" ? "#22C55E" : meta.color }}
+      className="text-left w-full rounded-2xl bg-white p-0 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-250 flex flex-col overflow-hidden group"
+      style={{ border: "1px solid #00000008" }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <CategoryTag id={course.category} small />
-        <DeadlineChip deadline={course.deadline} completed={status === "completada"} />
-      </div>
-      <div className="font-bold text-sm leading-snug mt-1" style={{ color: BRAND.ink }}>
-        {course.title}
-      </div>
-      <div className="text-xs text-gray-500 line-clamp-2">{course.description}</div>
-      <div className="flex items-center gap-3 text-[11px] text-gray-400 mt-1">
-        {course.videoUrl && (
-          <span className="flex items-center gap-1">
-            <PlayCircle size={12} /> Vídeo
+      <div className="w-full h-1.5 rounded-t-2xl" style={{ backgroundColor: accentColor }} />
+      <div className="p-4 flex flex-col gap-2.5 flex-1">
+        <div className="flex items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full" style={{ backgroundColor: pillBg, color: pillText }}>
+            <meta.icon size={11} />
+            {meta.label}
           </span>
-        )}
-        {course.presentationUrl && (
-          <span className="flex items-center gap-1">
-            <FileText size={12} /> Presentación
+          <DeadlineChip deadline={course.deadline} completed={completed} />
+        </div>
+        <div className="font-bold text-sm leading-snug" style={{ color: BRAND.ink }}>
+          {course.title}
+        </div>
+        <div className="text-xs text-gray-400 line-clamp-2 leading-relaxed">{course.description}</div>
+        <div className="flex items-center gap-3 text-[11px] text-gray-400 mt-auto pt-1" style={{ borderTop: "1px solid #00000008" }}>
+          {course.videoUrl && (
+            <span className="flex items-center gap-1">
+              <PlayCircle size={11} /> Vídeo
+            </span>
+          )}
+          {(course.attachments || []).length > 0 && (
+            <span className="flex items-center gap-1">
+              <FileText size={11} /> {course.attachments.length} doc{course.attachments.length > 1 ? "s" : ""}
+            </span>
+          )}
+          <span>
+            {course.testMode === "googleform" ? "Google Form" : `${(course.quiz || []).length} pregunta${(course.quiz || []).length === 1 ? "" : "s"}`}
           </span>
-        )}
-        <span>
-          {course.testMode === "googleform" ? "Test en Google Form" : `${(course.quiz || []).length} pregunta${(course.quiz || []).length === 1 ? "" : "s"} de test`}
-        </span>
+        </div>
       </div>
+      {(isOverdue || isDueSoon) && (
+        <div className="px-4 py-2 text-xs font-semibold flex items-center gap-1.5" style={{ backgroundColor: isOverdue ? "#FCEBEB" : "#FAEEDA", color: isOverdue ? "#791F1F" : "#633806" }}>
+          {isOverdue ? <AlertTriangle size={12} /> : <Clock size={12} />}
+          {isOverdue ? `Vencida hace ${Math.abs(days)} día${Math.abs(days) === 1 ? "" : "s"}` : `Vence en ${days} día${days === 1 ? "" : "s"}`}
+        </div>
+      )}
+      {completed && (
+        <div className="px-4 py-2 text-xs font-semibold flex items-center gap-1.5" style={{ backgroundColor: "#EAF3DE", color: "#27500A" }}>
+          <CheckCircle2 size={12} /> Completada
+        </div>
+      )}
     </button>
   );
 }
@@ -1946,67 +1975,63 @@ function WelcomeHero({ currentUser, pendingForUser, completedForUser, assignedCo
   const allDone = assignedCountForUser > 0 && pendingForUser.length === 0;
   const noneAssigned = assignedCountForUser === 0;
 
-  let icon = Clock,
-    statusLine = `${pendingForUser.length} formación${pendingForUser.length === 1 ? "" : "es"} por completar.`,
-    bg = "#FAEEDA",
-    fg = "#633806",
-    ring = "#C9A227";
+  let statusIcon = Clock,
+    statusLine = `${pendingForUser.length} formación${pendingForUser.length === 1 ? "" : "es"} por completar`,
+    statusColor = BRAND.gold;
   if (noneAssigned) {
-    icon = Home;
-    statusLine = "Todavía no tienes formaciones asignadas.";
-    bg = "#F1EFE8";
-    fg = "#5F5E5A";
-    ring = "#888780";
+    statusIcon = Home;
+    statusLine = "Sin formaciones asignadas todavía";
+    statusColor = "#888780";
   } else if (allDone) {
-    icon = CheckCircle2;
-    statusLine = "Estás al día con todo.";
-    bg = "#EAF3DE";
-    fg = "#27500A";
-    ring = "#639922";
+    statusIcon = CheckCircle2;
+    statusLine = "Estás al día con todo";
+    statusColor = "#639922";
   } else if (overdueCount > 0) {
-    icon = AlertTriangle;
-    statusLine = `${overdueCount} vencida${overdueCount === 1 ? "" : "s"} de ${pendingForUser.length} pendiente${pendingForUser.length === 1 ? "" : "s"}.`;
-    bg = "#FCEBEB";
-    fg = "#791F1F";
-    ring = "#E9312B";
+    statusIcon = AlertTriangle;
+    statusLine = `${overdueCount} vencida${overdueCount === 1 ? "" : "s"} · ${pendingForUser.length} pendiente${pendingForUser.length === 1 ? "" : "s"} en total`;
+    statusColor = BRAND.red;
   }
-  const Icon = icon;
+  const StatusIcon = statusIcon;
   const firstName = currentUser.split(" ")[0];
+  const { bg: statusBg, text: statusText } = pillColors(statusColor);
 
   return (
-    <div className="rounded-2xl p-6 shadow-sm" style={{ backgroundColor: bg }}>
-      <div className="flex items-center justify-between gap-5 flex-wrap">
-        <div className="flex items-center gap-3.5">
-          <Avatar name={currentUser} size={54} />
-          <div>
-            <div className="font-extrabold text-xl leading-tight" style={{ color: fg }}>
-              Hola, {firstName}
-            </div>
-            <div className="text-sm font-medium mt-0.5 flex items-center gap-1.5" style={{ color: fg, opacity: 0.9 }}>
-              <Icon size={14} />
-              {statusLine}
-            </div>
-          </div>
-        </div>
-        {!noneAssigned && <ProgressRing percent={progressPercent} color={ring} label={`${completedForUser.length}/${assignedCountForUser} formaciones`} />}
-      </div>
-
-      {!noneAssigned && (
-        <div className="flex items-center justify-between gap-4 flex-wrap mt-5 pt-4" style={{ borderTop: `1px solid ${shadeColor(bg, -0.06)}` }}>
-          <div className="flex items-center gap-2 bg-white rounded-xl px-3.5 py-2 shadow-sm">
-            <Trophy size={18} style={{ color: level.color }} />
+    <div className="rounded-2xl bg-white shadow-sm overflow-hidden" style={{ border: "1px solid #00000008" }}>
+      <div className="w-full h-1.5" style={{ backgroundColor: statusColor }} />
+      <div className="p-5 sm:p-6">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-4">
+            <Avatar name={currentUser} size={56} />
             <div>
-              <div className="text-xs font-bold" style={{ color: BRAND.ink }}>
-                {points} pts · Nivel {level.tier} · {level.name}
+              <div className="font-extrabold text-xl leading-tight" style={{ color: BRAND.ink }}>
+                Hola, {firstName}
               </div>
-              <div className="text-[10px] text-gray-400">
-                {level.nextMin != null ? `${level.nextMin - points} pts para el siguiente nivel` : "Nivel máximo alcanzado"}
+              <div className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full mt-1.5" style={{ backgroundColor: statusBg, color: statusText }}>
+                <StatusIcon size={13} />
+                {statusLine}
               </div>
             </div>
           </div>
-          {badges.length > 0 && <BadgesRow badges={badges} />}
+          {!noneAssigned && <ProgressRing percent={progressPercent} color={statusColor} label={`${completedForUser.length}/${assignedCountForUser}`} />}
         </div>
-      )}
+
+        {!noneAssigned && (
+          <div className="flex items-center gap-3 flex-wrap mt-5 pt-4" style={{ borderTop: "1px solid #00000008" }}>
+            <div className="flex items-center gap-2 rounded-xl px-3.5 py-2" style={{ backgroundColor: `${level.color}10` }}>
+              <Trophy size={16} style={{ color: level.color }} />
+              <div>
+                <div className="text-xs font-bold" style={{ color: BRAND.ink }}>
+                  {points} pts · {level.name}
+                </div>
+                <div className="text-[10px] text-gray-400">
+                  {level.nextMin != null ? `${level.nextMin - points} para subir` : "Nivel máximo"}
+                </div>
+              </div>
+            </div>
+            <BadgesRow badges={badges} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2014,13 +2039,13 @@ function WelcomeHero({ currentUser, pendingForUser, completedForUser, assignedCo
 function BadgesRow({ badges }) {
   if (!badges || badges.length === 0) return null;
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-1.5">
       {badges.map((b) => {
         const Icon = b.icon || Award;
         const { bg, text } = pillColors(BRAND.gold);
         return (
-          <div key={b.id} className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold shadow-sm" style={{ backgroundColor: bg, color: text }}>
-            <Icon size={13} />
+          <div key={b.id} className="flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold" style={{ backgroundColor: bg, color: text }}>
+            <Icon size={12} />
             {b.label}
           </div>
         );
@@ -2031,49 +2056,63 @@ function BadgesRow({ badges }) {
 
 function NewsCard({ item, featured, onOpen }) {
   const cat = item.linkType === "category" ? categoryMeta(item.linkId) : null;
+  const linkedCourse = item.linkType === "course" ? null : null;
   const accentColor = cat ? cat.color : BRAND.teal;
   const { bg: pillBg, text: pillText } = pillColors(accentColor);
-  const isNew = daysUntil(item.date) != null && Math.abs(daysUntil(item.date)) <= 3 && daysUntil(item.date) <= 0;
+  const daysDiff = daysUntil(item.date);
+  const isNew = daysDiff != null && Math.abs(daysDiff) <= 3;
   const clickable = item.linkType === "course" || item.linkType === "category";
   const Icon = cat ? cat.icon : Newspaper;
 
   return (
     <div
       onClick={clickable ? onOpen : undefined}
-      className={`bg-white rounded-2xl shadow-sm p-4 ${featured ? "sm:p-5" : ""} ${clickable ? "cursor-pointer hover:shadow-lg hover:-translate-y-0.5" : ""} transition-all duration-200`}
-      style={{ borderLeft: `5px solid ${accentColor}` }}
+      className={`bg-white rounded-2xl overflow-hidden ${clickable ? "cursor-pointer hover:shadow-xl hover:-translate-y-1" : ""} transition-all duration-250`}
+      style={{ border: "1px solid #00000008", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
     >
-      <div className="flex items-start justify-between gap-2 flex-wrap mb-2">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {isNew && (
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ backgroundColor: "#EAF3DE", color: "#27500A" }}>
-              Nuevo
-            </span>
+      <div className="flex">
+        <div className="w-1.5 flex-shrink-0 rounded-l-2xl" style={{ backgroundColor: accentColor }} />
+        <div className={`flex-1 ${featured ? "p-5" : "p-4"}`}>
+          <div className="flex items-start justify-between gap-2 flex-wrap mb-2">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {isNew && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ ...pillColors("#639922"), backgroundColor: pillColors("#639922").bg, color: pillColors("#639922").text }}>
+                  Nuevo
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: pillBg, color: pillText }}>
+                <Icon size={11} />
+                {cat ? cat.label : "General"}
+              </span>
+            </div>
+            <span className="text-[11px] text-gray-400 flex-shrink-0">{item.date}</span>
+          </div>
+          <div className={`font-bold leading-snug ${featured ? "text-base mb-1.5" : "text-sm"}`} style={{ color: BRAND.ink }}>
+            {item.title}
+          </div>
+          {featured && item.body && <div className="text-[13px] text-gray-500 leading-relaxed mb-2">{item.body}</div>}
+          {clickable && (
+            <div className="text-xs font-bold flex items-center gap-1 mt-2" style={{ color: BRAND.red }}>
+              {item.linkType === "course" ? "Ir a la formación" : "Ver campo"}
+              <ChevronRight size={13} />
+            </div>
           )}
-          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: pillBg, color: pillText }}>
-            <Icon size={11} />
-            {cat ? cat.label : "General"}
-          </span>
         </div>
-        <span className="text-[11px] text-gray-400 flex-shrink-0">{item.date}</span>
       </div>
-      <div className={`font-bold leading-snug ${featured ? "text-base" : "text-sm"}`} style={{ color: BRAND.ink }}>
-        {item.title}
-      </div>
-      {featured && item.body && <div className="text-sm text-gray-500 mt-1.5 leading-relaxed">{item.body}</div>}
-      {clickable && (
-        <div className="text-xs font-bold mt-2.5 flex items-center gap-1" style={{ color: BRAND.red }}>
-          {item.linkType === "course" ? "Ir a la formación" : "Ver campo"}
-          <ChevronRight size={13} />
-        </div>
-      )}
     </div>
   );
 }
 
 function NewsPanel({ news, onOpenNewsLink }) {
   if (news.length === 0) {
-    return <div className="text-sm text-gray-400">Sin novedades por ahora.</div>;
+    return (
+      <div className="flex flex-col items-center gap-2 py-10 text-center">
+        <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: "#00000006" }}>
+          <Newspaper size={18} className="text-gray-300" />
+        </div>
+        <div className="text-sm text-gray-400">Sin novedades por ahora.</div>
+      </div>
+    );
   }
   const [featured, ...rest] = news;
   return (
@@ -2109,25 +2148,21 @@ function Dashboard({ currentUser, news, pendingForUser, completedForUser, assign
         <NewsPanel news={news} onOpenNewsLink={onOpenNewsLink} />
       </div>
 
-      {currentUser && (
+      {currentUser && pendingForUser.length > 0 && (
         <div>
-          <SectionTitle icon={Clock}>Tus formaciones pendientes</SectionTitle>
-          {pendingForUser.length === 0 ? (
-            <div className="text-sm text-gray-400">No tienes formaciones pendientes. Al día.</div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {pendingForUser.map((c) => (
-                <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
-              ))}
-            </div>
-          )}
+          <SectionTitle icon={Clock}>Formaciones pendientes</SectionTitle>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {pendingForUser.map((c) => (
+              <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
+            ))}
+          </div>
         </div>
       )}
 
       {currentUser && completedForUser.length > 0 && (
         <div>
           <SectionTitle icon={CheckCircle2}>Completadas</SectionTitle>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 opacity-75">
             {completedForUser.map((c) => (
               <CourseCard key={c.id} course={c} status="completada" onOpen={() => onOpenCourse(c.id)} />
             ))}
@@ -2144,13 +2179,15 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
   if (total === 0) {
     return (
       <div className="flex flex-col items-center gap-3 py-16 text-center">
-        <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ backgroundColor: "#EAF3DE" }}>
-          <CheckCircle2 size={28} style={{ color: "#639922" }} />
+        <div className="w-20 h-20 rounded-full flex items-center justify-center" style={{ backgroundColor: "#EAF3DE" }}>
+          <CheckCircle2 size={32} style={{ color: "#639922" }} />
         </div>
-        <div className="font-bold text-lg" style={{ color: BRAND.ink }}>
-          Sin alertas ahora mismo
+        <div className="font-extrabold text-xl" style={{ color: BRAND.ink }}>
+          Sin alertas
         </div>
-        <div className="text-sm text-gray-400 max-w-xs">Aquí verás lo que esté vencido o a punto de vencer (3 días o menos).</div>
+        <div className="text-sm text-gray-400 max-w-xs">
+          Aquí aparecerá lo que esté vencido o a punto de vencer (3 días o menos). Todo bien por ahora.
+        </div>
       </div>
     );
   }
@@ -2159,15 +2196,18 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
     <div className="space-y-8">
       {overdueForUser.length > 0 && (
         <div>
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: "#FCEBEB" }}>
-              <AlertTriangle size={16} style={{ color: "#E9312B" }} />
+          <div className="flex items-center gap-2.5 mb-4">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: "#FCEBEB" }}>
+              <AlertTriangle size={17} style={{ color: "#E9312B" }} />
             </div>
-            <h2 className="font-extrabold text-lg" style={{ color: "#791F1F" }}>
-              Vencidas ({overdueForUser.length})
-            </h2>
+            <div>
+              <h2 className="font-extrabold text-lg leading-tight" style={{ color: "#791F1F" }}>
+                Vencidas
+              </h2>
+              <div className="text-xs text-gray-400">{overdueForUser.length} formación{overdueForUser.length === 1 ? "" : "es"} con el plazo pasado</div>
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {overdueForUser.map((c) => (
               <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
             ))}
@@ -2177,15 +2217,18 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
 
       {dueSoonForUser.length > 0 && (
         <div>
-          <div className="flex items-center gap-2 mb-3">
-            <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ backgroundColor: "#FAEEDA" }}>
-              <Clock size={16} style={{ color: "#C9A227" }} />
+          <div className="flex items-center gap-2.5 mb-4">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ backgroundColor: "#FAEEDA" }}>
+              <Clock size={17} style={{ color: "#C9A227" }} />
             </div>
-            <h2 className="font-extrabold text-lg" style={{ color: "#633806" }}>
-              Vencen en 3 días o menos ({dueSoonForUser.length})
-            </h2>
+            <div>
+              <h2 className="font-extrabold text-lg leading-tight" style={{ color: "#633806" }}>
+                Próximas a vencer
+              </h2>
+              <div className="text-xs text-gray-400">{dueSoonForUser.length} formación{dueSoonForUser.length === 1 ? "" : "es"} con 3 días o menos</div>
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {dueSoonForUser.map((c) => (
               <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
             ))}
@@ -2195,6 +2238,7 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
     </div>
   );
 }
+
 
 function shadeColor(hex, percent) {
   const num = parseInt(hex.replace("#", ""), 16);
