@@ -3683,6 +3683,36 @@ function AdminPanel({
             </button>
           </div>
 
+          <div className="flex gap-4 flex-wrap">
+            <div className="w-40">
+              <TextInput label="Fecha límite" type="date" value={draft.deadline} onChange={(v) => setDraft((d) => ({ ...d, deadline: v }))} />
+            </div>
+            {(!draft.modules || draft.modules.length === 0) && draft.testMode !== "googleform" && (
+              <div className="w-40">
+                <TextInput label="% para aprobar el test" type="number" value={draft.passPct} onChange={(v) => setDraft((d) => ({ ...d, passPct: Number(v) }))} />
+              </div>
+            )}
+            <div className="w-48">
+              <label className="block text-xs font-semibold text-gray-500 mb-1">
+                Caduca cada (meses, opcional)
+                <input
+                  type="number"
+                  min="0"
+                  value={draft.validityMonths || ""}
+                  onChange={(e) => setDraft((d) => ({ ...d, validityMonths: e.target.value ? Number(e.target.value) : null }))}
+                  placeholder="Ej. 12 — vacío = no caduca"
+                  className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900"
+                  style={{ borderColor: "#00000020" }}
+                />
+              </label>
+            </div>
+          </div>
+          {draft.validityMonths > 0 && (
+            <div className="text-[11px] text-gray-400 -mt-2">
+              Pasados {draft.validityMonths} mes{draft.validityMonths === 1 ? "" : "es"} desde que alguien la complete, le volverá a aparecer como pendiente automáticamente (recertificación).
+            </div>
+          )}
+
           {draft.modules && draft.modules.length > 0 ? (
             <div className="space-y-3">
               <div className="text-xs font-semibold text-gray-500 -mb-1">Módulos, en el orden en que se desbloquean</div>
@@ -3787,36 +3817,6 @@ function AdminPanel({
             <>
               <TextInput label="URL del vídeo (YouTube o Vimeo)" value={draft.videoUrl} onChange={(v) => setDraft((d) => ({ ...d, videoUrl: v }))} placeholder="https://www.youtube.com/watch?v=..." />
               <TextInput label="URL de la presentación (link embebible)" value={draft.presentationUrl} onChange={(v) => setDraft((d) => ({ ...d, presentationUrl: v }))} placeholder="https://..." />
-
-              <div className="flex gap-4 flex-wrap">
-                <div className="w-40">
-                  <TextInput label="Fecha límite" type="date" value={draft.deadline} onChange={(v) => setDraft((d) => ({ ...d, deadline: v }))} />
-                </div>
-                {draft.testMode !== "googleform" && (
-                  <div className="w-40">
-                    <TextInput label="% para aprobar el test" type="number" value={draft.passPct} onChange={(v) => setDraft((d) => ({ ...d, passPct: Number(v) }))} />
-                  </div>
-                )}
-                <div className="w-48">
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">
-                    Caduca cada (meses, opcional)
-                    <input
-                      type="number"
-                      min="0"
-                      value={draft.validityMonths || ""}
-                      onChange={(e) => setDraft((d) => ({ ...d, validityMonths: e.target.value ? Number(e.target.value) : null }))}
-                      placeholder="Ej. 12 — vacío = no caduca"
-                      className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900"
-                      style={{ borderColor: "#00000020" }}
-                    />
-                  </label>
-                </div>
-              </div>
-              {draft.validityMonths > 0 && (
-                <div className="text-[11px] text-gray-400 -mt-2">
-                  Pasados {draft.validityMonths} mes{draft.validityMonths === 1 ? "" : "es"} desde que alguien la complete, le volverá a aparecer como pendiente automáticamente (recertificación).
-                </div>
-              )}
 
           <div>
 
