@@ -2931,10 +2931,16 @@ function ModuleStepper({ modules, moduleProgress, activeIndex, viewedIndex, onSe
   );
 }
 
-function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, quizResult, onSubmit, onResetQuiz }) {
+function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers, quizResult, onSubmit, onResetQuiz, onContinue, isLastModule }) {
   const embed = getVideoEmbedUrl(mod.videoUrl);
   const quiz = mod.quiz || [];
   const allAnswered = quiz.every((_, i) => quizAnswers[i] !== undefined);
+  // Mostrar el formulario del test solo si el módulo no está ya superado Y no
+  // hay un resultado reciente en pantalla (si lo hay, mostramos ESE resultado
+  // primero, sin que el aviso "ya lo superaste" lo tape).
+  const showResultBanner = !!quizResult;
+  const showReadOnlyPassed = alreadyPassed && !showResultBanner;
+  const showQuizForm = !alreadyPassed && !showResultBanner && quiz.length > 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
@@ -2957,20 +2963,20 @@ function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, 
         </div>
       )}
 
-      {!canInteract && (
+      {showReadOnlyPassed && (
         <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", backgroundColor: "var(--bg-inset)", padding: "var(--sp-3)", borderRadius: "var(--radius-md)" }}>
           Ya superaste este módulo — lo estás revisando. No hace falta repetir el test.
         </div>
       )}
 
-      {canInteract && quiz.length > 0 && (
+      {(showResultBanner || showQuizForm) && quiz.length > 0 && (
         <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
           <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: "var(--sp-3)", display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
             <ClipboardList size={16} style={{ color: "var(--brand)" }} />
             Test de este módulo
           </div>
 
-          {quizResult ? (
+          {showResultBanner ? (
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
               <div style={{
                 borderRadius: "var(--radius-md)", padding: "var(--sp-3)", fontSize: "var(--text-sm)", fontWeight: 600,
@@ -2987,6 +2993,16 @@ function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, 
                 <button onClick={onResetQuiz} style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content" }}>
                   Reintentar
                 </button>
+              )}
+              {quizResult.passed && !isLastModule && (
+                <button onClick={onContinue} style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content", display: "flex", alignItems: "center", gap: 6 }}>
+                  Ir al siguiente módulo <ChevronRight size={15} />
+                </button>
+              )}
+              {quizResult.passed && isLastModule && (
+                <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--success-text)" }}>
+                  🎉 ¡Formación completada entera! Ya puedes volver al catálogo cuando quieras.
+                </div>
               )}
             </div>
           ) : (
@@ -3023,7 +3039,7 @@ function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, 
                 onClick={onSubmit}
                 style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !allAnswered ? 0.4 : 1, width: "fit-content" }}
               >
-                Enviar y continuar
+                Enviar respuestas
               </button>
             </div>
           )}
@@ -3050,8 +3066,13 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
     setViewedIndex(i);
   }
 
+  function goToNextModule() {
+    onResetQuiz();
+    setViewedIndex((i) => Math.min(i + 1, modules.length - 1));
+  }
+
   const viewedModule = modules[viewedIndex];
-  const canInteract = viewedIndex === activeIndex && !allDone;
+  const viewedAlreadyPassed = !!moduleProgress[viewedModule?.id]?.passed;
 
   return (
     <div style={{ maxWidth: 900 }}>
@@ -3089,19 +3110,14 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
           {viewedModule && (
             <ModuleContent
               module={viewedModule}
-              canInteract={canInteract}
+              alreadyPassed={viewedAlreadyPassed}
+              isLastModule={viewedIndex === modules.length - 1}
               quizAnswers={quizAnswers}
               setQuizAnswers={setQuizAnswers}
-              quizResult={canInteract ? quizResult : null}
+              quizResult={quizResult}
+              onContinue={goToNextModule}
               onSubmit={async () => {
-                const result = await onSubmitModuleQuiz(viewedModule);
-                if (result?.passed && viewedIndex < modules.length - 1) {
-                  // pequeña pausa para que se vea el mensaje de "superado" antes de saltar
-                  setTimeout(() => {
-                    onResetQuiz();
-                    setViewedIndex(viewedIndex + 1);
-                  }, 1400);
-                }
+                await onSubmitModuleQuiz(viewedModule);
               }}
               onResetQuiz={onResetQuiz}
             />
@@ -3224,6 +3240,7 @@ function AdminPanel({
       quiz: [{ ...emptyQuestion }],
       attachments: [],
       assignment: { ...emptyAssignment },
+      modules: [],
     });
     setFileError("");
   }
@@ -3235,6 +3252,7 @@ function AdminPanel({
       quiz: (course.quiz && course.quiz.length ? course.quiz : [{ ...emptyQuestion }]).map((q) => ({ ...q, options: [...q.options] })),
       attachments: course.attachments ? [...course.attachments] : [],
       assignment: course.assignment ? { ...course.assignment } : { ...emptyAssignment },
+      modules: course.modules ? course.modules.map((m) => ({ ...m, quiz: (m.quiz || []).map((q) => ({ ...q, options: [...q.options] })) })) : [],
     });
     setFileError("");
     setTab("editor");
@@ -3294,6 +3312,52 @@ function AdminPanel({
   }
   function removeQuestion(qi) {
     setDraft((d) => ({ ...d, quiz: d.quiz.filter((_, i) => i !== qi) }));
+  }
+
+  // ---- Gestión de módulos (formaciones secuenciales) ----
+  function toggleModularMode() {
+    setDraft((d) => {
+      const turningOn = !(d.modules && d.modules.length > 0);
+      return { ...d, modules: turningOn ? [{ id: uid(), title: "Módulo 1", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }] }] : [] };
+    });
+  }
+  function addModule() {
+    setDraft((d) => ({ ...d, modules: [...(d.modules || []), { id: uid(), title: `Módulo ${(d.modules || []).length + 1}`, body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }] }] }));
+  }
+  function removeModule(mi) {
+    setDraft((d) => ({ ...d, modules: d.modules.filter((_, i) => i !== mi) }));
+  }
+  function moveModule(mi, direction) {
+    setDraft((d) => {
+      const modules = [...d.modules];
+      const target = mi + direction;
+      if (target < 0 || target >= modules.length) return d;
+      [modules[mi], modules[target]] = [modules[target], modules[mi]];
+      return { ...d, modules };
+    });
+  }
+  function updateModuleField(mi, field, value) {
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, [field]: value } : m)) }));
+  }
+  function addModuleQuestion(mi) {
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, quiz: [...m.quiz, { ...emptyQuestion }] } : m)) }));
+  }
+  function removeModuleQuestion(mi, qi) {
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, quiz: m.quiz.filter((_, j) => j !== qi) } : m)) }));
+  }
+  function updateModuleQuestion(mi, qi, field, value) {
+    setDraft((d) => ({
+      ...d,
+      modules: d.modules.map((m, i) => (i !== mi ? m : { ...m, quiz: m.quiz.map((q, j) => (j === qi ? { ...q, [field]: value } : q)) })),
+    }));
+  }
+  function updateModuleOption(mi, qi, oi, value) {
+    setDraft((d) => ({
+      ...d,
+      modules: d.modules.map((m, i) =>
+        i !== mi ? m : { ...m, quiz: m.quiz.map((q, j) => (j !== qi ? q : { ...q, options: q.options.map((o, k) => (k === oi ? value : o)) })) }
+      ),
+    }));
   }
   function canSave() {
     return draft.title.trim().length > 0;
@@ -3457,21 +3521,145 @@ function AdminPanel({
             <textarea value={draft.description} onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))} rows={2} className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900" style={{ borderColor: "#00000020" }} />
           </label>
 
-          <TextInput label="URL del vídeo (YouTube o Vimeo)" value={draft.videoUrl} onChange={(v) => setDraft((d) => ({ ...d, videoUrl: v }))} placeholder="https://www.youtube.com/watch?v=..." />
-          <TextInput label="URL de la presentación (link embebible)" value={draft.presentationUrl} onChange={(v) => setDraft((d) => ({ ...d, presentationUrl: v }))} placeholder="https://..." />
-
-          <div className="flex gap-4 flex-wrap">
-            <div className="w-40">
-              <TextInput label="Fecha límite" type="date" value={draft.deadline} onChange={(v) => setDraft((d) => ({ ...d, deadline: v }))} />
-            </div>
-            {draft.testMode !== "googleform" && (
-              <div className="w-40">
-                <TextInput label="% para aprobar el test" type="number" value={draft.passPct} onChange={(v) => setDraft((d) => ({ ...d, passPct: Number(v) }))} />
+          <div className="rounded-lg p-3 flex items-center justify-between gap-3" style={{ backgroundColor: "var(--bg-inset)" }}>
+            <div>
+              <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+                Formación por módulos secuenciales
               </div>
-            )}
+              <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                Varias partes que hay que ir aprobando una a una para desbloquear la siguiente, con su propio progreso dentro de la formación. Si lo desactivas, vuelve a ser una formación normal (un único vídeo/test).
+              </div>
+            </div>
+            <button
+              onClick={toggleModularMode}
+              style={{
+                width: 44, height: 24, borderRadius: 999, flexShrink: 0, position: "relative", border: "none", cursor: "pointer",
+                backgroundColor: draft.modules && draft.modules.length > 0 ? "var(--brand)" : "#00000025",
+                transition: "background-color 0.2s",
+              }}
+            >
+              <span style={{ position: "absolute", top: 2, left: draft.modules && draft.modules.length > 0 ? 22 : 2, width: 20, height: 20, borderRadius: "50%", backgroundColor: "white", transition: "left 0.2s" }} />
+            </button>
           </div>
 
+          {draft.modules && draft.modules.length > 0 ? (
+            <div className="space-y-3">
+              <div className="text-xs font-semibold text-gray-500 -mb-1">Módulos, en el orden en que se desbloquean</div>
+              {draft.modules.map((mod, mi) => (
+                <div key={mod.id} className="rounded-lg border p-3 space-y-2.5" style={{ borderColor: "#00000018", backgroundColor: "white" }}>
+                  <div className="flex items-center gap-2">
+                    <span className="flex-shrink-0 flex items-center justify-center rounded-full font-bold text-white text-xs" style={{ backgroundColor: "var(--brand)", width: 22, height: 22 }}>
+                      {mi + 1}
+                    </span>
+                    <input
+                      value={mod.title}
+                      onChange={(e) => updateModuleField(mi, "title", e.target.value)}
+                      placeholder={`Título del módulo ${mi + 1}`}
+                      className="flex-1 text-sm font-semibold rounded-md border px-2 py-1.5"
+                      style={{ borderColor: "#00000020" }}
+                    />
+                    <button disabled={mi === 0} onClick={() => moveModule(mi, -1)} className="text-gray-400 disabled:opacity-30" title="Subir">
+                      <ChevronUp size={16} />
+                    </button>
+                    <button disabled={mi === draft.modules.length - 1} onClick={() => moveModule(mi, 1)} className="text-gray-400 disabled:opacity-30" title="Bajar">
+                      <ChevronDown size={16} />
+                    </button>
+                    {draft.modules.length > 1 && (
+                      <button onClick={() => removeModule(mi)} className="text-red-500" title="Eliminar módulo">
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
+
+                  <textarea
+                    value={mod.body}
+                    onChange={(e) => updateModuleField(mi, "body", e.target.value)}
+                    placeholder="Contenido / explicación de este módulo (texto)"
+                    rows={3}
+                    className="w-full text-xs rounded-md border px-2 py-1.5"
+                    style={{ borderColor: "#00000018" }}
+                  />
+                  <input
+                    value={mod.videoUrl}
+                    onChange={(e) => updateModuleField(mi, "videoUrl", e.target.value)}
+                    placeholder="URL de vídeo para este módulo (opcional)"
+                    className="w-full text-xs rounded-md border px-2 py-1.5"
+                    style={{ borderColor: "#00000018" }}
+                  />
+
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="text-xs font-semibold text-gray-500">Test de este módulo</div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-[11px] text-gray-400 flex items-center gap-1">
+                        % para aprobar
+                        <input
+                          type="number"
+                          value={mod.passPct}
+                          onChange={(e) => updateModuleField(mi, "passPct", Number(e.target.value))}
+                          className="w-14 text-xs rounded-md border px-1.5 py-1"
+                          style={{ borderColor: "#00000018" }}
+                        />
+                      </label>
+                      <button onClick={() => addModuleQuestion(mi)} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
+                        <Plus size={12} /> Pregunta
+                      </button>
+                    </div>
+                  </div>
+
+                  {mod.quiz.map((q, qi) => (
+                    <div key={qi} className="rounded-md p-2 space-y-1.5" style={{ backgroundColor: "var(--bg-inset)" }}>
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={q.question}
+                          onChange={(e) => updateModuleQuestion(mi, qi, "question", e.target.value)}
+                          placeholder={`Pregunta ${qi + 1}`}
+                          className="flex-1 text-xs rounded-md border px-2 py-1"
+                          style={{ borderColor: "#00000018" }}
+                        />
+                        {mod.quiz.length > 1 && (
+                          <button onClick={() => removeModuleQuestion(mi, qi)} className="text-red-500">
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                      {q.options.map((opt, oi) => (
+                        <div key={oi} className="flex items-center gap-2">
+                          <input type="radio" checked={q.correct === oi} onChange={() => updateModuleQuestion(mi, qi, "correct", oi)} className="flex-shrink-0" />
+                          <input
+                            value={opt}
+                            onChange={(e) => updateModuleOption(mi, qi, oi, e.target.value)}
+                            placeholder={`Opción ${oi + 1}`}
+                            className="flex-1 text-xs rounded-md border px-2 py-1"
+                            style={{ borderColor: "#00000015" }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ))}
+              <button onClick={addModule} className="text-sm font-semibold flex items-center gap-1.5" style={{ color: BRAND.red }}>
+                <Plus size={15} /> Añadir otro módulo
+              </button>
+            </div>
+          ) : (
+            <>
+              <TextInput label="URL del vídeo (YouTube o Vimeo)" value={draft.videoUrl} onChange={(v) => setDraft((d) => ({ ...d, videoUrl: v }))} placeholder="https://www.youtube.com/watch?v=..." />
+              <TextInput label="URL de la presentación (link embebible)" value={draft.presentationUrl} onChange={(v) => setDraft((d) => ({ ...d, presentationUrl: v }))} placeholder="https://..." />
+
+              <div className="flex gap-4 flex-wrap">
+                <div className="w-40">
+                  <TextInput label="Fecha límite" type="date" value={draft.deadline} onChange={(v) => setDraft((d) => ({ ...d, deadline: v }))} />
+                </div>
+                {draft.testMode !== "googleform" && (
+                  <div className="w-40">
+                    <TextInput label="% para aprobar el test" type="number" value={draft.passPct} onChange={(v) => setDraft((d) => ({ ...d, passPct: Number(v) }))} />
+                  </div>
+                )}
+              </div>
+
           <div>
+
             <div className="text-xs font-semibold text-gray-500 mb-2">Cómo se hace el test</div>
             <div className="flex gap-2 flex-wrap mb-2">
               {[
@@ -3539,6 +3727,8 @@ function AdminPanel({
               </div>
             )}
           </div>
+            </>
+          )}
 
           <div>
             <div className="text-xs font-semibold text-gray-500 mb-2">Asignar formación a</div>
