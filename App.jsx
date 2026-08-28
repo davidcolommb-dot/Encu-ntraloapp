@@ -249,6 +249,190 @@ function getFormEmbedUrl(url) {
 const SEED_COURSES = [
   {
     id: uid(),
+    title: "[Ejemplo] Cómo usar el Aula Virtual — tutorial completo",
+    category: "generica",
+    description:
+      "Formación de bienvenida para quien nunca ha usado el Aula Virtual: cómo entrar, qué es cada pantalla, cómo hacer una formación de principio a fin, y cómo funcionan los puntos e insignias. Son 5 módulos que se van desbloqueando uno a uno — esta formación es, de hecho, un ejemplo en vivo de cómo funcionan las formaciones por módulos.",
+    videoUrl: "",
+    presentationUrl: "",
+    deadline: "",
+    testMode: "interno",
+    passPct: 70,
+    attachments: [],
+    modules: [
+      {
+        id: "m1",
+        title: "1. Bienvenida y cómo entrar",
+        videoUrl: "",
+        body:
+          "El Aula Virtual es el sitio donde vas a encontrar toda tu formación: protocolos de trabajo, formación general, formación específica de tu equipo, y contenidos de IA y nuevas tecnologías. Cada formación tiene su vídeo o material, y un test final que confirma que la has entendido.\n\n" +
+          "CÓMO ENTRAR\n" +
+          "En la pantalla de acceso escribes tu nombre y apellido, tal como está registrado, y pulsas \"Continuar\".\n\n" +
+          "LA PRIMERA VEZ es distinto a las siguientes: como todavía no tienes contraseña, la aplicación te pedirá tu email (el mismo que el administrador registró) para comprobar que eres tú, y a continuación podrás crear tu contraseña — mínimo 6 caracteres, elige una que no uses en otro sitio importante.\n\n" +
+          "LAS SIGUIENTES VECES ya solo hace falta tu nombre y esa contraseña. Además, el propio navegador recuerda que has iniciado sesión, así que si cierras y vuelves a abrir la página no te la va a volver a pedir, hasta que pulses \"Cerrar sesión\" tú mismo.\n\n" +
+          "SI TE BLOQUEAS: si no recuerdas tu contraseña, no hay forma de \"recuperarla\" — por seguridad, ni siquiera el administrador puede verla. Lo que sí puede hacer es restablecerla, y la próxima vez que entres, el sistema te pedirá crear una nueva, verificando tu email otra vez, igual que la primera vez.",
+        quiz: [
+          {
+            question: "¿Qué necesitas la PRIMERA vez que entras, además de tu nombre?",
+            options: ["Tu DNI", "Verificar tu email para poder crear tu contraseña", "El PIN que te dé un compañero", "Nada más, ya tienes contraseña desde el principio"],
+            correct: 1,
+          },
+          {
+            question: "¿Puede el administrador ver tu contraseña si la olvidas?",
+            options: ["Sí, siempre puede verla", "No — solo puede restablecerla, y tú creas una nueva", "Solo si lleva más de un año en la empresa", "Solo los fines de semana"],
+            correct: 1,
+          },
+          {
+            question: "Si cierras el navegador y lo vuelves a abrir al día siguiente, ¿tienes que volver a escribir tu contraseña?",
+            options: ["Sí, siempre, cada vez", "No, el navegador recuerda tu sesión hasta que cierres sesión tú mismo", "Solo si es lunes", "Solo si el administrador lo decide cada día"],
+            correct: 1,
+          },
+        ],
+        passPct: 70,
+      },
+      {
+        id: "m2",
+        title: "2. La pantalla de Inicio",
+        videoUrl: "",
+        body:
+          "Al entrar, lo primero que ves es tu panel personal — pensado para responder de un vistazo a \"¿qué tengo que hacer?\".\n\n" +
+          "EL SALUDO Y TU ESTADO: arriba del todo aparece tu nombre y una etiqueta de color que resume tu situación: verde si estás al día, ámbar si tienes formaciones pendientes, o rojo si alguna ha pasado de plazo.\n\n" +
+          "CONTINUAR FORMACIÓN: justo debajo, si tienes algo pendiente, aparece una tarjeta con la formación más urgente y un botón \"Continuar\" — es la forma más rápida de retomar exactamente lo que te toca hacer, sin tener que buscarlo.\n\n" +
+          "LOS NÚMEROS: pendientes, completadas, y tu progreso en porcentaje — de un vistazo, sin tener que entrar a mirar formación por formación.\n\n" +
+          "PUNTOS, NIVEL E INSIGNIAS: cada formación completada suma 100 puntos. Acumulando puntos subes de nivel (Iniciando → En marcha → Consolidado → Experto). También se desbloquean insignias automáticamente: por tu primera formación, por llegar a 5 y a 10, por completar una categoría entera, y una especial por estar al día con todo. Es individual — nadie ve tus puntos ni tú los de los demás.\n\n" +
+          "NOVEDADES: más abajo, avisos publicados por el administrador. Si una novedad menciona una formación o un campo en concreto, puedes pinchar en ella y te lleva directo ahí.",
+        quiz: [
+          {
+            question: "¿Qué hace el botón \"Continuar\" de la tarjeta principal de Inicio?",
+            options: ["Cierra tu sesión", "Te lleva directo a la formación más urgente que tienes pendiente", "Te lleva al panel de administración", "Descarga un PDF"],
+            correct: 1,
+          },
+          {
+            question: "¿Cuántos puntos suma completar una formación?",
+            options: ["10", "50", "100", "Depende del número de preguntas del test"],
+            correct: 2,
+          },
+          {
+            question: "¿Pueden tus compañeros ver cuántos puntos tienes tú?",
+            options: ["Sí, hay una clasificación pública", "No, los puntos y el nivel son individuales, solo los ves tú", "Solo el administrador puede verlo, y lo comparte con todos", "Solo si tú lo compartes en las Novedades"],
+            correct: 1,
+          },
+          {
+            question: "Si una novedad menciona una formación concreta, ¿qué puedes hacer?",
+            options: ["Nada, las novedades son solo texto", "Pinchar en ella para ir directo a esa formación", "Hay que buscarla a mano en el catálogo, la novedad no enlaza a nada", "Solo el administrador puede abrirla"],
+            correct: 1,
+          },
+        ],
+        passPct: 70,
+      },
+      {
+        id: "m3",
+        title: "3. Catálogo y Alertas",
+        videoUrl: "",
+        body:
+          "CATÁLOGO: al entrar, en vez de una lista larga con todo mezclado, ves 4 burbujas grandes de color — una por cada campo: Protocolos, Formación genérica, Formación específica por equipo, e IA y nuevas tecnologías. Pinchando en una entras a ver solo las formaciones de ese campo.\n\n" +
+          "DENTRO DE UN CAMPO: las formaciones pendientes se ordenan solas por urgencia — primero las que ya han vencido, luego las que tienen el plazo más próximo, y al final las que no tienen fecha límite. Las que ya completaste se guardan aparte, en un apartado plegado que no estorba, por si quieres repasarlas.\n\n" +
+          "Para volver a las burbujas desde dentro de un campo, hay un botón \"Catálogo\" arriba a la izquierda.\n\n" +
+          "ALERTAS: es una pestaña aparte, pensada solo para lo urgente. Ahí, y solo ahí, ves separado en dos bloques: lo que ya está VENCIDO, y lo que vence en 3 días o menos. Si tienes algo ahí, verás un número rojo pequeño junto a la palabra \"Alertas\" en el menú de arriba — así sabes que hay algo urgente sin tener que entrar a comprobarlo.\n\n" +
+          "Si no tienes nada urgente, la pestaña de Alertas simplemente te lo dice con un mensaje tranquilo — no significa que esté rota, significa que vas bien.",
+        quiz: [
+          {
+            question: "¿Qué ves nada más entrar en el Catálogo?",
+            options: ["Una lista con todas las formaciones mezcladas", "4 burbujas de color, una por cada campo", "Un buscador vacío", "El panel de administración"],
+            correct: 1,
+          },
+          {
+            question: "Dentro de un campo, ¿en qué orden aparecen las formaciones pendientes?",
+            options: ["Por orden alfabético", "Al azar", "Por urgencia: vencidas primero, luego las más próximas a vencer", "Por orden de creación, la más antigua primero"],
+            correct: 2,
+          },
+          {
+            question: "¿Qué diferencia hay entre \"Alertas\" y el Catálogo?",
+            options: ["Ninguna, muestran lo mismo", "Alertas solo muestra lo vencido o a punto de vencer (3 días o menos); el Catálogo muestra todo", "Alertas es solo para el administrador", "Alertas muestra las formaciones ya completadas"],
+            correct: 1,
+          },
+          {
+            question: "Si la pestaña \"Alertas\" no tiene ningún número rojo al lado, ¿qué significa?",
+            options: ["Que está rota", "Que no tienes nada urgente ahora mismo", "Que tienes que refrescar la página", "Que el administrador la ha desactivado"],
+            correct: 1,
+          },
+        ],
+        passPct: 70,
+      },
+      {
+        id: "m4",
+        title: "4. Hacer una formación de principio a fin",
+        videoUrl: "",
+        body:
+          "Al abrir cualquier formación, vas a ver, en este orden: la descripción, el vídeo (si lo tiene), documentos adjuntos (si los hay), y el test final.\n\n" +
+          "EL VÍDEO: se reproduce dentro de la propia página. Si por lo que sea no cargara bien, debajo siempre hay un enlace para verlo directamente en su web de origen (YouTube, Vimeo...), en una pestaña aparte.\n\n" +
+          "LOS DOCUMENTOS: cada uno tiene dos botones — \"Abrir en pestaña nueva\" y \"Descargar\". Usa el que mejor te funcione.\n\n" +
+          "EL TEST — dos formas distintas según la formación:\n" +
+          "· Interno (el más habitual): preguntas de opción múltiple, como las que estás respondiendo ahora mismo. Hace falta un porcentaje mínimo de aciertos para aprobar (normalmente 70%).\n" +
+          "· Google Form: se abre un formulario externo. Como la aplicación no puede leer las respuestas de un Google Form, tú mismo marcas \"Ya he completado el formulario\" cuando termines.\n\n" +
+          "SI NO APRUEBAS un test interno: no pasa nada, puedes reintentarlo las veces que haga falta, sin ningún tipo de penalización. Simplemente pulsa \"Reintentar\" y vuelve a marcar tus respuestas.\n\n" +
+          "Esta misma formación que estás haciendo ahora es un ejemplo de formación \"por módulos\" — un tipo especial donde hay que ir aprobando cada parte para desbloquear la siguiente, con una barra de progreso propia. Es menos habitual que el formato normal (un único test al final), pero funciona igual en lo esencial: contenido, luego preguntas, luego siguiente paso.",
+        quiz: [
+          {
+            question: "Si el vídeo incrustado no carga bien, ¿qué puedes hacer?",
+            options: ["Nada, hay que esperar a que el administrador lo arregle", "Usar el enlace de debajo para verlo en su web de origen", "La formación queda inaccesible", "Llamar a soporte técnico de Google"],
+            correct: 1,
+          },
+          {
+            question: "En un test interno, si no apruebas, ¿qué pasa?",
+            options: ["Ya no puedes volver a intentarlo nunca", "Puedes reintentarlo las veces que haga falta, sin penalización", "Tienes que esperar una semana para reintentarlo", "Se avisa automáticamente a tu responsable"],
+            correct: 1,
+          },
+          {
+            question: "En una formación con test por Google Form, ¿quién corrige tus respuestas?",
+            options: ["La aplicación las corrige sola, automáticamente", "Nadie las corrige — tú marcas \"completado\" cuando terminas, y un administrador puede revisarlas si hace falta", "Se corrigen por videollamada", "No se puede hacer ese tipo de test todavía"],
+            correct: 1,
+          },
+          {
+            question: "¿Qué tiene de especial la formación que estás haciendo ahora mismo?",
+            options: ["Nada, es una formación normal", "Es un ejemplo de formación \"por módulos\", con partes que se desbloquean una a una", "Es la única formación obligatoria de la empresa", "No tiene ningún test"],
+            correct: 1,
+          },
+        ],
+        passPct: 70,
+      },
+      {
+        id: "m5",
+        title: "5. Resumen y para terminar",
+        videoUrl: "",
+        body:
+          "Repaso rápido de lo más importante:\n\n" +
+          "· Entras con tu nombre y tu contraseña — la primera vez, verificando tu email.\n" +
+          "· En Inicio ves de un vistazo qué tienes pendiente y cuál es tu siguiente paso.\n" +
+          "· El Catálogo se organiza por campos (burbujas); dentro, lo más urgente sale primero.\n" +
+          "· Alertas es solo para lo vencido o a punto de vencer — un número rojo te avisa si hay algo.\n" +
+          "· Cada formación tiene su contenido y su test; si no apruebas, puedes reintentar sin problema.\n" +
+          "· Vas ganando puntos, subiendo de nivel y desbloqueando insignias según completas formaciones — es solo tuyo, nadie más lo ve.\n\n" +
+          "SI TIENES DUDAS que esta formación no haya resuelto, consulta con tu responsable o con la persona indicada en cada formación concreta — este espacio está para ayudarte a hacer mejor tu trabajo, no para complicarlo.\n\n" +
+          "¡Eso es todo! Al aprobar este último test, la formación completa quedará marcada como superada, y sumará sus puntos correspondientes a tu perfil.",
+        quiz: [
+          {
+            question: "¿Qué pestaña deberías mirar si quieres ver solo lo urgente (vencido o a 3 días o menos)?",
+            options: ["Inicio", "Catálogo", "Alertas", "Administración"],
+            correct: 2,
+          },
+          {
+            question: "Si no apruebas un test interno a la primera, ¿debes preocuparte?",
+            options: ["Sí, cuenta como una falta grave", "No, puedes reintentarlo sin ningún problema", "Solo si lo cuentas en las Novedades", "Sí, pierdes puntos por cada intento fallido"],
+            correct: 1,
+          },
+          {
+            question: "¿A quién deberías consultar si tienes una duda que esta formación no ha resuelto?",
+            options: ["A nadie, hay que resolverlo solo", "A tu responsable o a la persona indicada en cada formación", "Solo por escrito en las Novedades", "No hay forma de resolver dudas en esta empresa"],
+            correct: 1,
+          },
+        ],
+        passPct: 70,
+      },
+    ],
+  },
+  {
+    id: uid(),
     title: "[Ejemplo] Seguridad básica en el almacén",
     category: "protocolos",
     description:
@@ -596,6 +780,7 @@ async function materializeSeedCourses(seedList) {
       id: uid(),
       quiz: (c.quiz || []).map((q) => ({ ...q, options: [...q.options] })),
       attachments: finalAttachments,
+      createdAt: c.createdAt || new Date().toISOString(),
     });
   }
   return result;
@@ -1244,6 +1429,51 @@ export default function AulaVirtualMB() {
     setQuizResult({ score, passed, correctCount, total: quiz.length });
   }
 
+  // Formaciones "por módulos": cada módulo tiene su propio mini-test, y hay que
+  // aprobar uno para desbloquear el siguiente. El progreso se guarda por módulo
+  // dentro del mismo registro de la formación; la formación entera se marca
+  // "completada" solo cuando todos los módulos están aprobados.
+  async function submitModuleQuiz(courseId, moduleObj) {
+    if (!currentUser) return null;
+    const quiz = moduleObj.quiz || [];
+    let correctCount = 0;
+    quiz.forEach((q, i) => {
+      if (quizAnswers[i] === q.correct) correctCount++;
+    });
+    const score = quiz.length ? Math.round((correctCount / quiz.length) * 100) : 100;
+    const passed = score >= (moduleObj.passPct ?? 70);
+
+    const current = await loadKey(`mb_completions_course_${courseId}`, {});
+    const prevRec = current[currentUser] || { startedAt: todayISO(), moduleProgress: {} };
+    const prevModuleRec = prevRec.moduleProgress?.[moduleObj.id];
+    const moduleProgress = {
+      ...(prevRec.moduleProgress || {}),
+      [moduleObj.id]: {
+        passed,
+        score,
+        completedAt: passed ? todayISO() : prevModuleRec?.completedAt || null,
+        attempts: (prevModuleRec?.attempts || 0) + 1,
+      },
+    };
+
+    const course = courses.find((c) => c.id === courseId);
+    const allPassed = (course?.modules || []).every((m) => moduleProgress[m.id]?.passed);
+
+    const updatedRec = {
+      ...prevRec,
+      status: allPassed ? "completada" : "en_progreso",
+      moduleProgress,
+      completedAt: allPassed ? todayISO() : null,
+    };
+    const updated = { ...current, [currentUser]: updatedRec };
+    setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
+    await saveKey(`mb_completions_course_${courseId}`, updated);
+
+    const result = { score, passed, correctCount, total: quiz.length };
+    setQuizResult(result);
+    return result;
+  }
+
   async function selfReportComplete(courseId) {
     if (!currentUser) return;
     const current = await loadKey(`mb_completions_course_${courseId}`, {});
@@ -1559,8 +1789,13 @@ export default function AulaVirtualMB() {
 
   async function saveCourse(course) {
     let updated;
-    if (courses.find((c) => c.id === course.id)) updated = courses.map((c) => (c.id === course.id ? course : c));
-    else updated = [...courses, course];
+    const existing = courses.find((c) => c.id === course.id);
+    // Marca de tiempo de publicación: se fija la primera vez y no se toca en
+    // ediciones posteriores — la usa el sistema de avisos para saber qué
+    // formaciones son "nuevas" (publicadas en las últimas ~24-48h).
+    const courseWithTimestamp = { ...course, createdAt: existing?.createdAt || course.createdAt || new Date().toISOString() };
+    if (existing) updated = courses.map((c) => (c.id === course.id ? courseWithTimestamp : c));
+    else updated = [...courses, courseWithTimestamp];
     setCourses(updated);
     await saveKey("mb_courses", updated);
   }
@@ -1845,6 +2080,11 @@ export default function AulaVirtualMB() {
             setQuizAnswers={setQuizAnswers}
             quizResult={quizResult}
             onSubmitQuiz={submitQuiz}
+            onSubmitModuleQuiz={(moduleObj) => submitModuleQuiz(activeCourse.id, moduleObj)}
+            onResetQuiz={() => {
+              setQuizAnswers({});
+              setQuizResult(null);
+            }}
             onSelfReport={() => selfReportComplete(activeCourse.id)}
             onBack={() => setView("catalog")}
             onRetry={() => {
@@ -2450,7 +2690,23 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
 }
 
 
-function CourseDetail({ course, currentUser, status, record, quizAnswers, setQuizAnswers, quizResult, onSubmitQuiz, onSelfReport, onBack, onRetry }) {
+function CourseDetail({ course, currentUser, status, record, quizAnswers, setQuizAnswers, quizResult, onSubmitQuiz, onSubmitModuleQuiz, onResetQuiz, onSelfReport, onBack, onRetry }) {
+  if (course.modules && course.modules.length > 0) {
+    return (
+      <ModularCourseDetail
+        course={course}
+        currentUser={currentUser}
+        record={record}
+        quizAnswers={quizAnswers}
+        setQuizAnswers={setQuizAnswers}
+        quizResult={quizResult}
+        onSubmitModuleQuiz={onSubmitModuleQuiz}
+        onResetQuiz={onResetQuiz}
+        onBack={onBack}
+      />
+    );
+  }
+
   const embed = getVideoEmbedUrl(course.videoUrl);
   const quiz = course.quiz || [];
   const allAnswered = quiz.every((_, i) => quizAnswers[i] !== undefined);
@@ -2626,6 +2882,236 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
     </div>
   );
 }
+
+/* ---------- Formaciones por módulos (secuenciales, con desbloqueo) ---------- */
+
+function ModuleStepper({ modules, moduleProgress, activeIndex, viewedIndex, onSelect }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      {modules.map((m, i) => {
+        const passed = moduleProgress[m.id]?.passed;
+        const locked = i > activeIndex;
+        const isViewed = i === viewedIndex;
+        let icon = <span style={{ fontSize: 11, fontWeight: 700 }}>{i + 1}</span>;
+        let iconBg = "var(--bg-inset)";
+        let iconColor = "var(--text-muted)";
+        if (passed) {
+          icon = <CheckCircle2 size={13} />;
+          iconBg = "var(--success)";
+          iconColor = "white";
+        } else if (locked) {
+          icon = <Lock size={11} />;
+        } else if (i === activeIndex) {
+          iconBg = "var(--brand)";
+          iconColor = "white";
+        }
+        return (
+          <button
+            key={m.id}
+            disabled={locked}
+            onClick={() => onSelect(i)}
+            style={{
+              display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+              borderRadius: "var(--radius-md)", border: "none", textAlign: "left",
+              backgroundColor: isViewed ? "var(--brand-soft)" : "transparent",
+              cursor: locked ? "not-allowed" : "pointer", opacity: locked ? 0.55 : 1,
+              width: "100%",
+            }}
+          >
+            <span style={{ width: 22, height: 22, borderRadius: "var(--radius-full)", backgroundColor: iconBg, color: iconColor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              {icon}
+            </span>
+            <span style={{ fontSize: "var(--text-sm)", fontWeight: isViewed ? 600 : 500, color: locked ? "var(--text-muted)" : "var(--text-primary)" }}>
+              {m.title}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, quizResult, onSubmit, onResetQuiz }) {
+  const embed = getVideoEmbedUrl(mod.videoUrl);
+  const quiz = mod.quiz || [];
+  const allAnswered = quiz.every((_, i) => quizAnswers[i] !== undefined);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
+      <h2 style={{ fontSize: "var(--text-xl)", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>{mod.title}</h2>
+
+      {mod.body && (
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: 1.7, whiteSpace: "pre-line" }}>
+          {mod.body}
+        </div>
+      )}
+
+      {mod.videoUrl && (
+        <div>
+          <div style={{ borderRadius: "var(--radius-lg)", overflow: "hidden", backgroundColor: "#000", aspectRatio: "16/9" }}>
+            <iframe src={embed} style={{ width: "100%", height: "100%", border: "none" }} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title={mod.title} />
+          </div>
+          <a href={mod.videoUrl} target="_blank" rel="noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--info)", marginTop: "var(--sp-2)" }}>
+            <PlayCircle size={13} /> Ver el vídeo en su web de origen ↗
+          </a>
+        </div>
+      )}
+
+      {!canInteract && (
+        <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", backgroundColor: "var(--bg-inset)", padding: "var(--sp-3)", borderRadius: "var(--radius-md)" }}>
+          Ya superaste este módulo — lo estás revisando. No hace falta repetir el test.
+        </div>
+      )}
+
+      {canInteract && quiz.length > 0 && (
+        <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
+          <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: "var(--sp-3)", display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
+            <ClipboardList size={16} style={{ color: "var(--brand)" }} />
+            Test de este módulo
+          </div>
+
+          {quizResult ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+              <div style={{
+                borderRadius: "var(--radius-md)", padding: "var(--sp-3)", fontSize: "var(--text-sm)", fontWeight: 600,
+                display: "flex", alignItems: "center", gap: 8,
+                backgroundColor: quizResult.passed ? "var(--success-soft)" : "var(--danger-soft)",
+                color: quizResult.passed ? "var(--success-text)" : "var(--danger-text)",
+              }}>
+                {quizResult.passed ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                {quizResult.passed
+                  ? `Superado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%). Módulo desbloqueado.`
+                  : `No alcanzado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%). Necesitas ${mod.passPct ?? 70}%.`}
+              </div>
+              {!quizResult.passed && (
+                <button onClick={onResetQuiz} style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content" }}>
+                  Reintentar
+                </button>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
+              {quiz.map((q, qi) => (
+                <div key={qi}>
+                  <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, marginBottom: "var(--sp-2)", color: "var(--text-primary)" }}>
+                    {qi + 1}. {q.question}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {q.options.map((opt, oi) => {
+                      const selected = quizAnswers[qi] === oi;
+                      return (
+                        <div
+                          key={oi}
+                          onClick={() => setQuizAnswers((prev) => ({ ...prev, [qi]: oi }))}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 8, fontSize: "var(--text-sm)",
+                            borderRadius: "var(--radius-md)", border: `1px solid ${selected ? "var(--brand)" : "var(--border)"}`,
+                            padding: "8px 12px", cursor: "pointer", transition: "all var(--dur-fast) var(--ease-out)",
+                            backgroundColor: selected ? "var(--brand-soft)" : "var(--bg-card)", color: "var(--text-primary)",
+                          }}
+                        >
+                          <span style={{ width: 14, height: 14, borderRadius: "var(--radius-full)", border: `1.5px solid ${selected ? "var(--brand)" : "var(--border-strong)"}`, backgroundColor: selected ? "var(--brand)" : "transparent", flexShrink: 0 }} />
+                          {opt}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+              <button
+                disabled={!allAnswered}
+                onClick={onSubmit}
+                style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !allAnswered ? 0.4 : 1, width: "fit-content" }}
+              >
+                Enviar y continuar
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuizAnswers, quizResult, onSubmitModuleQuiz, onResetQuiz, onBack }) {
+  const modules = course.modules;
+  const moduleProgress = record?.moduleProgress || {};
+  const passedCount = modules.filter((m) => moduleProgress[m.id]?.passed).length;
+  const percent = Math.round((passedCount / modules.length) * 100);
+  const firstUnpassedIndex = modules.findIndex((m) => !moduleProgress[m.id]?.passed);
+  const allDone = firstUnpassedIndex === -1;
+  const activeIndex = allDone ? modules.length - 1 : firstUnpassedIndex;
+
+  const [viewedIndex, setViewedIndex] = useState(activeIndex);
+
+  function selectModule(i) {
+    if (i > activeIndex) return; // bloqueado
+    onResetQuiz();
+    setViewedIndex(i);
+  }
+
+  const viewedModule = modules[viewedIndex];
+  const canInteract = viewedIndex === activeIndex && !allDone;
+
+  return (
+    <div style={{ maxWidth: 900 }}>
+      <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content", marginBottom: "var(--sp-4)" }}>
+        <ChevronLeft size={15} /> Volver al catálogo
+      </button>
+
+      <div style={{ marginBottom: "var(--sp-2)" }}>
+        <CategoryTag id={course.category} />
+        <h1 style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--text-primary)", margin: "var(--sp-2) 0 var(--sp-1) 0", lineHeight: 1.3 }}>
+          {course.title}
+        </h1>
+        <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0, lineHeight: 1.5, maxWidth: 640 }}>{course.description}</p>
+      </div>
+
+      {/* Progreso dentro de la propia formación */}
+      <div style={{ ...DS.card, padding: "var(--sp-4)", marginBottom: "var(--sp-5)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
+            {allDone ? "🎉 Formación completada" : `${passedCount} de ${modules.length} módulos completados`}
+          </span>
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--brand)" }}>{percent}%</span>
+        </div>
+        <div style={{ height: 8, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${percent}%`, backgroundColor: allDone ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)", transition: "width 0.4s var(--ease-out)" }} />
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: "var(--sp-5)", alignItems: "flex-start" }}>
+        <div style={{ ...DS.card, padding: "var(--sp-2)", position: "sticky", top: 72 }}>
+          <ModuleStepper modules={modules} moduleProgress={moduleProgress} activeIndex={activeIndex} viewedIndex={viewedIndex} onSelect={selectModule} />
+        </div>
+
+        <div style={{ ...DS.card, padding: "var(--sp-5)" }}>
+          {viewedModule && (
+            <ModuleContent
+              module={viewedModule}
+              canInteract={canInteract}
+              quizAnswers={quizAnswers}
+              setQuizAnswers={setQuizAnswers}
+              quizResult={canInteract ? quizResult : null}
+              onSubmit={async () => {
+                const result = await onSubmitModuleQuiz(viewedModule);
+                if (result?.passed && viewedIndex < modules.length - 1) {
+                  // pequeña pausa para que se vea el mensaje de "superado" antes de saltar
+                  setTimeout(() => {
+                    onResetQuiz();
+                    setViewedIndex(viewedIndex + 1);
+                  }, 1400);
+                }
+              }}
+              onResetQuiz={onResetQuiz}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function TextInput({ label, value, onChange, placeholder, type = "text" }) {
   return (
