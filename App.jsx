@@ -3,7 +3,7 @@ import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
   Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp, ChevronRight,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
-  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet
+  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
@@ -55,6 +55,19 @@ function daysUntil(dateStr) {
   const target = new Date(dateStr + "T23:59:59");
   const now = new Date();
   return Math.ceil((target - now) / 86400000);
+}
+
+// Caducidad y recertificación: si una formación tiene validityMonths configurado,
+// una vez pasado ese tiempo desde que se completó, vuelve a contar como pendiente
+// — sin borrar el historial de que ya se hizo una vez (eso se conserva en el
+// propio registro, solo cambia lo que se considera "vigente ahora mismo").
+function isCourseExpired(course, record) {
+  if (!course?.validityMonths || !record?.completedAt) return false;
+  const completedDate = new Date(record.completedAt);
+  if (isNaN(completedDate.getTime())) return false;
+  const expiryDate = new Date(completedDate);
+  expiryDate.setMonth(expiryDate.getMonth() + course.validityMonths);
+  return new Date() > expiryDate;
 }
 
 function daysFromNow(n) {
@@ -830,6 +843,31 @@ function ProgressRing({ percent, size = 64, color = BRAND.red, label }) {
   );
 }
 
+function RatingStars({ rating, onRate }) {
+  const [hover, setHover] = useState(0);
+  return (
+    <div style={{ ...DS.card, padding: "var(--sp-4)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-3)", flexWrap: "wrap" }}>
+      <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
+        {rating ? "Gracias por tu valoración" : "¿Te ha resultado útil esta formación?"}
+      </div>
+      <div style={{ display: "flex", gap: 2 }}>
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button
+            key={n}
+            onClick={() => onRate(n)}
+            onMouseEnter={() => setHover(n)}
+            onMouseLeave={() => setHover(0)}
+            style={{ border: "none", background: "none", cursor: "pointer", padding: 2, display: "flex" }}
+            title={`${n} estrella${n === 1 ? "" : "s"}`}
+          >
+            <Star size={22} fill={(hover || rating) >= n ? "var(--warning)" : "none"} color={(hover || rating) >= n ? "var(--warning)" : "var(--border-strong)"} />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DeadlineChip({ deadline, completed }) {
   if (completed) {
     return <StatusPill icon={CheckCircle2} label="Completada" variant="success" />;
@@ -1374,7 +1412,12 @@ export default function AulaVirtualMB() {
 
   function getStatus(user, courseId) {
     const rec = completionsByCourse[courseId]?.[user];
-    return rec ? rec.status : "pendiente";
+    if (!rec) return "pendiente";
+    if (rec.status === "completada") {
+      const course = courses.find((c) => c.id === courseId);
+      if (isCourseExpired(course, rec)) return "pendiente";
+    }
+    return rec.status;
   }
   function getRecord(user, courseId) {
     return completionsByCourse[courseId]?.[user] || null;
@@ -1489,6 +1532,19 @@ export default function AulaVirtualMB() {
         attempts: (prev.attempts || 0) + 1,
       },
     };
+    setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
+    await saveKey(`mb_completions_course_${courseId}`, updated);
+  }
+
+  // Valoración rápida (1-5 estrellas) que la persona puede dejar tras completar
+  // una formación. No obliga a nadie ni bloquea nada — es solo feedback opcional
+  // para que el administrador vea qué formaciones funcionan mejor.
+  async function rateCourse(courseId, rating) {
+    if (!currentUser) return;
+    const current = await loadKey(`mb_completions_course_${courseId}`, {});
+    const prev = current[currentUser];
+    if (!prev) return;
+    const updated = { ...current, [currentUser]: { ...prev, rating } };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
     await saveKey(`mb_completions_course_${courseId}`, updated);
   }
@@ -2086,6 +2142,7 @@ export default function AulaVirtualMB() {
               setQuizResult(null);
             }}
             onSelfReport={() => selfReportComplete(activeCourse.id)}
+            onRateCourse={(rating) => rateCourse(activeCourse.id, rating)}
             onBack={() => setView("catalog")}
             onRetry={() => {
               setQuizAnswers({});
@@ -2614,6 +2671,7 @@ function CategoryPicker({ onSelectCategory }) {
 
 function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory }) {
   const [showCompleted, setShowCompleted] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses;
 
   if (visibleCourses.length === 0) {
@@ -2629,8 +2687,63 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
     );
   }
 
+  const searchBar = (
+    <div style={{ position: "relative", marginBottom: "var(--sp-5)" }}>
+      <Search size={16} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+      <input
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        placeholder="Buscar una formación por su nombre o tema…"
+        style={{
+          width: "100%", padding: "10px 12px 10px 38px", borderRadius: "var(--radius-md)",
+          border: "1px solid var(--border)", fontSize: "var(--text-sm)", color: "var(--text-primary)",
+          backgroundColor: "var(--bg-card)",
+        }}
+      />
+      {searchQuery && (
+        <button
+          onClick={() => setSearchQuery("")}
+          style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex" }}
+        >
+          <X size={15} />
+        </button>
+      )}
+    </div>
+  );
+
+  const query = searchQuery.trim().toLowerCase();
+  if (query) {
+    const matches = visibleCourses.filter(
+      (c) => c.title.toLowerCase().includes(query) || (c.description || "").toLowerCase().includes(query) || categoryMeta(c.category).label.toLowerCase().includes(query)
+    );
+    return (
+      <div>
+        {searchBar}
+        <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: "var(--sp-3)" }}>
+          {matches.length} resultado{matches.length === 1 ? "" : "s"} para "{searchQuery}"
+        </div>
+        {matches.length === 0 ? (
+          <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", padding: "var(--sp-6) 0", textAlign: "center" }}>
+            No hay ninguna formación que coincida. Prueba con otra palabra.
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+            {matches.map((c) => (
+              <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (!selectedCategory) {
-    return <CategoryPicker onSelectCategory={onSelectCategory} />;
+    return (
+      <div>
+        {searchBar}
+        <CategoryPicker onSelectCategory={onSelectCategory} />
+      </div>
+    );
   }
 
   const cat = categoryMeta(selectedCategory);
@@ -2641,6 +2754,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
+      {searchBar}
       <button onClick={() => onSelectCategory(null)} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content" }}>
         <ChevronLeft size={15} /> Catálogo
       </button>
@@ -2690,7 +2804,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
 }
 
 
-function CourseDetail({ course, currentUser, status, record, quizAnswers, setQuizAnswers, quizResult, onSubmitQuiz, onSubmitModuleQuiz, onResetQuiz, onSelfReport, onBack, onRetry }) {
+function CourseDetail({ course, currentUser, status, record, quizAnswers, setQuizAnswers, quizResult, onSubmitQuiz, onSubmitModuleQuiz, onResetQuiz, onSelfReport, onRateCourse, onBack, onRetry }) {
   if (course.modules && course.modules.length > 0) {
     return (
       <ModularCourseDetail
@@ -2702,6 +2816,7 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
         quizResult={quizResult}
         onSubmitModuleQuiz={onSubmitModuleQuiz}
         onResetQuiz={onResetQuiz}
+        onRateCourse={onRateCourse}
         onBack={onBack}
       />
     );
@@ -2879,6 +2994,10 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
           )}
         </div>
       )}
+
+      {status === "completada" && currentUser && (
+        <RatingStars rating={record?.rating || 0} onRate={onRateCourse} />
+      )}
     </div>
   );
 }
@@ -2931,10 +3050,16 @@ function ModuleStepper({ modules, moduleProgress, activeIndex, viewedIndex, onSe
   );
 }
 
-function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, quizResult, onSubmit, onResetQuiz }) {
+function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers, quizResult, onSubmit, onResetQuiz, onContinue, isLastModule }) {
   const embed = getVideoEmbedUrl(mod.videoUrl);
   const quiz = mod.quiz || [];
   const allAnswered = quiz.every((_, i) => quizAnswers[i] !== undefined);
+  // Mostrar el formulario del test solo si el módulo no está ya superado Y no
+  // hay un resultado reciente en pantalla (si lo hay, mostramos ESE resultado
+  // primero, sin que el aviso "ya lo superaste" lo tape).
+  const showResultBanner = !!quizResult;
+  const showReadOnlyPassed = alreadyPassed && !showResultBanner;
+  const showQuizForm = !alreadyPassed && !showResultBanner && quiz.length > 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
@@ -2957,20 +3082,20 @@ function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, 
         </div>
       )}
 
-      {!canInteract && (
+      {showReadOnlyPassed && (
         <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", backgroundColor: "var(--bg-inset)", padding: "var(--sp-3)", borderRadius: "var(--radius-md)" }}>
           Ya superaste este módulo — lo estás revisando. No hace falta repetir el test.
         </div>
       )}
 
-      {canInteract && quiz.length > 0 && (
+      {(showResultBanner || showQuizForm) && quiz.length > 0 && (
         <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
           <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: "var(--sp-3)", display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
             <ClipboardList size={16} style={{ color: "var(--brand)" }} />
             Test de este módulo
           </div>
 
-          {quizResult ? (
+          {showResultBanner ? (
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
               <div style={{
                 borderRadius: "var(--radius-md)", padding: "var(--sp-3)", fontSize: "var(--text-sm)", fontWeight: 600,
@@ -2987,6 +3112,16 @@ function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, 
                 <button onClick={onResetQuiz} style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content" }}>
                   Reintentar
                 </button>
+              )}
+              {quizResult.passed && !isLastModule && (
+                <button onClick={onContinue} style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content", display: "flex", alignItems: "center", gap: 6 }}>
+                  Ir al siguiente módulo <ChevronRight size={15} />
+                </button>
+              )}
+              {quizResult.passed && isLastModule && (
+                <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--success-text)" }}>
+                  🎉 ¡Formación completada entera! Ya puedes volver al catálogo cuando quieras.
+                </div>
               )}
             </div>
           ) : (
@@ -3023,7 +3158,7 @@ function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, 
                 onClick={onSubmit}
                 style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !allAnswered ? 0.4 : 1, width: "fit-content" }}
               >
-                Enviar y continuar
+                Enviar respuestas
               </button>
             </div>
           )}
@@ -3033,7 +3168,7 @@ function ModuleContent({ module: mod, canInteract, quizAnswers, setQuizAnswers, 
   );
 }
 
-function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuizAnswers, quizResult, onSubmitModuleQuiz, onResetQuiz, onBack }) {
+function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuizAnswers, quizResult, onSubmitModuleQuiz, onResetQuiz, onRateCourse, onBack }) {
   const modules = course.modules;
   const moduleProgress = record?.moduleProgress || {};
   const passedCount = modules.filter((m) => moduleProgress[m.id]?.passed).length;
@@ -3050,8 +3185,13 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
     setViewedIndex(i);
   }
 
+  function goToNextModule() {
+    onResetQuiz();
+    setViewedIndex((i) => Math.min(i + 1, modules.length - 1));
+  }
+
   const viewedModule = modules[viewedIndex];
-  const canInteract = viewedIndex === activeIndex && !allDone;
+  const viewedAlreadyPassed = !!moduleProgress[viewedModule?.id]?.passed;
 
   return (
     <div style={{ maxWidth: 900 }}>
@@ -3085,27 +3225,25 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
           <ModuleStepper modules={modules} moduleProgress={moduleProgress} activeIndex={activeIndex} viewedIndex={viewedIndex} onSelect={selectModule} />
         </div>
 
-        <div style={{ ...DS.card, padding: "var(--sp-5)" }}>
-          {viewedModule && (
-            <ModuleContent
-              module={viewedModule}
-              canInteract={canInteract}
-              quizAnswers={quizAnswers}
-              setQuizAnswers={setQuizAnswers}
-              quizResult={canInteract ? quizResult : null}
-              onSubmit={async () => {
-                const result = await onSubmitModuleQuiz(viewedModule);
-                if (result?.passed && viewedIndex < modules.length - 1) {
-                  // pequeña pausa para que se vea el mensaje de "superado" antes de saltar
-                  setTimeout(() => {
-                    onResetQuiz();
-                    setViewedIndex(viewedIndex + 1);
-                  }, 1400);
-                }
-              }}
-              onResetQuiz={onResetQuiz}
-            />
-          )}
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
+          <div style={{ ...DS.card, padding: "var(--sp-5)" }}>
+            {viewedModule && (
+              <ModuleContent
+                module={viewedModule}
+                alreadyPassed={viewedAlreadyPassed}
+                isLastModule={viewedIndex === modules.length - 1}
+                quizAnswers={quizAnswers}
+                setQuizAnswers={setQuizAnswers}
+                quizResult={quizResult}
+                onContinue={goToNextModule}
+                onSubmit={async () => {
+                  await onSubmitModuleQuiz(viewedModule);
+                }}
+                onResetQuiz={onResetQuiz}
+              />
+            )}
+          </div>
+          {allDone && currentUser && <RatingStars rating={record?.rating || 0} onRate={onRateCourse} />}
         </div>
       </div>
     </div>
@@ -3224,6 +3362,8 @@ function AdminPanel({
       quiz: [{ ...emptyQuestion }],
       attachments: [],
       assignment: { ...emptyAssignment },
+      modules: [],
+      validityMonths: null,
     });
     setFileError("");
   }
@@ -3235,6 +3375,7 @@ function AdminPanel({
       quiz: (course.quiz && course.quiz.length ? course.quiz : [{ ...emptyQuestion }]).map((q) => ({ ...q, options: [...q.options] })),
       attachments: course.attachments ? [...course.attachments] : [],
       assignment: course.assignment ? { ...course.assignment } : { ...emptyAssignment },
+      modules: course.modules ? course.modules.map((m) => ({ ...m, quiz: (m.quiz || []).map((q) => ({ ...q, options: [...q.options] })) })) : [],
     });
     setFileError("");
     setTab("editor");
@@ -3295,6 +3436,52 @@ function AdminPanel({
   function removeQuestion(qi) {
     setDraft((d) => ({ ...d, quiz: d.quiz.filter((_, i) => i !== qi) }));
   }
+
+  // ---- Gestión de módulos (formaciones secuenciales) ----
+  function toggleModularMode() {
+    setDraft((d) => {
+      const turningOn = !(d.modules && d.modules.length > 0);
+      return { ...d, modules: turningOn ? [{ id: uid(), title: "Módulo 1", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }] }] : [] };
+    });
+  }
+  function addModule() {
+    setDraft((d) => ({ ...d, modules: [...(d.modules || []), { id: uid(), title: `Módulo ${(d.modules || []).length + 1}`, body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }] }] }));
+  }
+  function removeModule(mi) {
+    setDraft((d) => ({ ...d, modules: d.modules.filter((_, i) => i !== mi) }));
+  }
+  function moveModule(mi, direction) {
+    setDraft((d) => {
+      const modules = [...d.modules];
+      const target = mi + direction;
+      if (target < 0 || target >= modules.length) return d;
+      [modules[mi], modules[target]] = [modules[target], modules[mi]];
+      return { ...d, modules };
+    });
+  }
+  function updateModuleField(mi, field, value) {
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, [field]: value } : m)) }));
+  }
+  function addModuleQuestion(mi) {
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, quiz: [...m.quiz, { ...emptyQuestion }] } : m)) }));
+  }
+  function removeModuleQuestion(mi, qi) {
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, quiz: m.quiz.filter((_, j) => j !== qi) } : m)) }));
+  }
+  function updateModuleQuestion(mi, qi, field, value) {
+    setDraft((d) => ({
+      ...d,
+      modules: d.modules.map((m, i) => (i !== mi ? m : { ...m, quiz: m.quiz.map((q, j) => (j === qi ? { ...q, [field]: value } : q)) })),
+    }));
+  }
+  function updateModuleOption(mi, qi, oi, value) {
+    setDraft((d) => ({
+      ...d,
+      modules: d.modules.map((m, i) =>
+        i !== mi ? m : { ...m, quiz: m.quiz.map((q, j) => (j !== qi ? q : { ...q, options: q.options.map((o, k) => (k === oi ? value : o)) })) }
+      ),
+    }));
+  }
   function canSave() {
     return draft.title.trim().length > 0;
   }
@@ -3325,6 +3512,19 @@ function AdminPanel({
       }
     }
     return rows;
+  }, [completionsByCourse, courses]);
+
+  // Valoración media por formación (solo con quien haya puntuado, 1-5 estrellas).
+  const avgRatingByCourse = useMemo(() => {
+    const result = {};
+    for (const c of courses) {
+      const data = completionsByCourse[c.id] || {};
+      const ratings = Object.values(data).map((r) => r.rating).filter((r) => typeof r === "number" && r > 0);
+      if (ratings.length > 0) {
+        result[c.id] = { avg: ratings.reduce((a, b) => a + b, 0) / ratings.length, count: ratings.length };
+      }
+    }
+    return result;
   }, [completionsByCourse, courses]);
 
   const pendingReportRows = useMemo(() => {
@@ -3423,6 +3623,11 @@ function AdminPanel({
               <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
                 <CategoryTag id={c.category} small />
                 <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
+                {avgRatingByCourse[c.id] && (
+                  <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 600, color: "var(--warning)", flexShrink: 0 }} title={`${avgRatingByCourse[c.id].count} valoración${avgRatingByCourse[c.id].count === 1 ? "" : "es"}`}>
+                    <Star size={11} fill="var(--warning)" /> {avgRatingByCourse[c.id].avg.toFixed(1)}
+                  </span>
+                )}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
                 <button onClick={() => loadDraft(c)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--info)", background: "none", border: "none", cursor: "pointer" }}>
@@ -3457,21 +3662,164 @@ function AdminPanel({
             <textarea value={draft.description} onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))} rows={2} className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900" style={{ borderColor: "#00000020" }} />
           </label>
 
-          <TextInput label="URL del vídeo (YouTube o Vimeo)" value={draft.videoUrl} onChange={(v) => setDraft((d) => ({ ...d, videoUrl: v }))} placeholder="https://www.youtube.com/watch?v=..." />
-          <TextInput label="URL de la presentación (link embebible)" value={draft.presentationUrl} onChange={(v) => setDraft((d) => ({ ...d, presentationUrl: v }))} placeholder="https://..." />
-
-          <div className="flex gap-4 flex-wrap">
-            <div className="w-40">
-              <TextInput label="Fecha límite" type="date" value={draft.deadline} onChange={(v) => setDraft((d) => ({ ...d, deadline: v }))} />
-            </div>
-            {draft.testMode !== "googleform" && (
-              <div className="w-40">
-                <TextInput label="% para aprobar el test" type="number" value={draft.passPct} onChange={(v) => setDraft((d) => ({ ...d, passPct: Number(v) }))} />
+          <div className="rounded-lg p-3 flex items-center justify-between gap-3" style={{ backgroundColor: "var(--bg-inset)" }}>
+            <div>
+              <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
+                Formación por módulos secuenciales
               </div>
-            )}
+              <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                Varias partes que hay que ir aprobando una a una para desbloquear la siguiente, con su propio progreso dentro de la formación. Si lo desactivas, vuelve a ser una formación normal (un único vídeo/test).
+              </div>
+            </div>
+            <button
+              onClick={toggleModularMode}
+              style={{
+                width: 44, height: 24, borderRadius: 999, flexShrink: 0, position: "relative", border: "none", cursor: "pointer",
+                backgroundColor: draft.modules && draft.modules.length > 0 ? "var(--brand)" : "#00000025",
+                transition: "background-color 0.2s",
+              }}
+            >
+              <span style={{ position: "absolute", top: 2, left: draft.modules && draft.modules.length > 0 ? 22 : 2, width: 20, height: 20, borderRadius: "50%", backgroundColor: "white", transition: "left 0.2s" }} />
+            </button>
           </div>
 
+          {draft.modules && draft.modules.length > 0 ? (
+            <div className="space-y-3">
+              <div className="text-xs font-semibold text-gray-500 -mb-1">Módulos, en el orden en que se desbloquean</div>
+              {draft.modules.map((mod, mi) => (
+                <div key={mod.id} className="rounded-lg border p-3 space-y-2.5" style={{ borderColor: "#00000018", backgroundColor: "white" }}>
+                  <div className="flex items-center gap-2">
+                    <span className="flex-shrink-0 flex items-center justify-center rounded-full font-bold text-white text-xs" style={{ backgroundColor: "var(--brand)", width: 22, height: 22 }}>
+                      {mi + 1}
+                    </span>
+                    <input
+                      value={mod.title}
+                      onChange={(e) => updateModuleField(mi, "title", e.target.value)}
+                      placeholder={`Título del módulo ${mi + 1}`}
+                      className="flex-1 text-sm font-semibold rounded-md border px-2 py-1.5"
+                      style={{ borderColor: "#00000020" }}
+                    />
+                    <button disabled={mi === 0} onClick={() => moveModule(mi, -1)} className="text-gray-400 disabled:opacity-30" title="Subir">
+                      <ChevronUp size={16} />
+                    </button>
+                    <button disabled={mi === draft.modules.length - 1} onClick={() => moveModule(mi, 1)} className="text-gray-400 disabled:opacity-30" title="Bajar">
+                      <ChevronDown size={16} />
+                    </button>
+                    {draft.modules.length > 1 && (
+                      <button onClick={() => removeModule(mi)} className="text-red-500" title="Eliminar módulo">
+                        <Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
+
+                  <textarea
+                    value={mod.body}
+                    onChange={(e) => updateModuleField(mi, "body", e.target.value)}
+                    placeholder="Contenido / explicación de este módulo (texto)"
+                    rows={3}
+                    className="w-full text-xs rounded-md border px-2 py-1.5"
+                    style={{ borderColor: "#00000018" }}
+                  />
+                  <input
+                    value={mod.videoUrl}
+                    onChange={(e) => updateModuleField(mi, "videoUrl", e.target.value)}
+                    placeholder="URL de vídeo para este módulo (opcional)"
+                    className="w-full text-xs rounded-md border px-2 py-1.5"
+                    style={{ borderColor: "#00000018" }}
+                  />
+
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="text-xs font-semibold text-gray-500">Test de este módulo</div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-[11px] text-gray-400 flex items-center gap-1">
+                        % para aprobar
+                        <input
+                          type="number"
+                          value={mod.passPct}
+                          onChange={(e) => updateModuleField(mi, "passPct", Number(e.target.value))}
+                          className="w-14 text-xs rounded-md border px-1.5 py-1"
+                          style={{ borderColor: "#00000018" }}
+                        />
+                      </label>
+                      <button onClick={() => addModuleQuestion(mi)} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
+                        <Plus size={12} /> Pregunta
+                      </button>
+                    </div>
+                  </div>
+
+                  {mod.quiz.map((q, qi) => (
+                    <div key={qi} className="rounded-md p-2 space-y-1.5" style={{ backgroundColor: "var(--bg-inset)" }}>
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={q.question}
+                          onChange={(e) => updateModuleQuestion(mi, qi, "question", e.target.value)}
+                          placeholder={`Pregunta ${qi + 1}`}
+                          className="flex-1 text-xs rounded-md border px-2 py-1"
+                          style={{ borderColor: "#00000018" }}
+                        />
+                        {mod.quiz.length > 1 && (
+                          <button onClick={() => removeModuleQuestion(mi, qi)} className="text-red-500">
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                      {q.options.map((opt, oi) => (
+                        <div key={oi} className="flex items-center gap-2">
+                          <input type="radio" checked={q.correct === oi} onChange={() => updateModuleQuestion(mi, qi, "correct", oi)} className="flex-shrink-0" />
+                          <input
+                            value={opt}
+                            onChange={(e) => updateModuleOption(mi, qi, oi, e.target.value)}
+                            placeholder={`Opción ${oi + 1}`}
+                            className="flex-1 text-xs rounded-md border px-2 py-1"
+                            style={{ borderColor: "#00000015" }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              ))}
+              <button onClick={addModule} className="text-sm font-semibold flex items-center gap-1.5" style={{ color: BRAND.red }}>
+                <Plus size={15} /> Añadir otro módulo
+              </button>
+            </div>
+          ) : (
+            <>
+              <TextInput label="URL del vídeo (YouTube o Vimeo)" value={draft.videoUrl} onChange={(v) => setDraft((d) => ({ ...d, videoUrl: v }))} placeholder="https://www.youtube.com/watch?v=..." />
+              <TextInput label="URL de la presentación (link embebible)" value={draft.presentationUrl} onChange={(v) => setDraft((d) => ({ ...d, presentationUrl: v }))} placeholder="https://..." />
+
+              <div className="flex gap-4 flex-wrap">
+                <div className="w-40">
+                  <TextInput label="Fecha límite" type="date" value={draft.deadline} onChange={(v) => setDraft((d) => ({ ...d, deadline: v }))} />
+                </div>
+                {draft.testMode !== "googleform" && (
+                  <div className="w-40">
+                    <TextInput label="% para aprobar el test" type="number" value={draft.passPct} onChange={(v) => setDraft((d) => ({ ...d, passPct: Number(v) }))} />
+                  </div>
+                )}
+                <div className="w-48">
+                  <label className="block text-xs font-semibold text-gray-500 mb-1">
+                    Caduca cada (meses, opcional)
+                    <input
+                      type="number"
+                      min="0"
+                      value={draft.validityMonths || ""}
+                      onChange={(e) => setDraft((d) => ({ ...d, validityMonths: e.target.value ? Number(e.target.value) : null }))}
+                      placeholder="Ej. 12 — vacío = no caduca"
+                      className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900"
+                      style={{ borderColor: "#00000020" }}
+                    />
+                  </label>
+                </div>
+              </div>
+              {draft.validityMonths > 0 && (
+                <div className="text-[11px] text-gray-400 -mt-2">
+                  Pasados {draft.validityMonths} mes{draft.validityMonths === 1 ? "" : "es"} desde que alguien la complete, le volverá a aparecer como pendiente automáticamente (recertificación).
+                </div>
+              )}
+
           <div>
+
             <div className="text-xs font-semibold text-gray-500 mb-2">Cómo se hace el test</div>
             <div className="flex gap-2 flex-wrap mb-2">
               {[
@@ -3539,6 +3887,8 @@ function AdminPanel({
               </div>
             )}
           </div>
+            </>
+          )}
 
           <div>
             <div className="text-xs font-semibold text-gray-500 mb-2">Asignar formación a</div>
