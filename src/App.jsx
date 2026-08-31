@@ -1776,6 +1776,28 @@ export default function AulaVirtualMB() {
     return employees.find((e) => e.name === currentUser)?.managedGroupIds || [];
   }, [employees, currentUser]);
 
+  // Estado de cada miembro del equipo que gestiona esta persona (si es
+  // responsable de alguno) — para el panel visual en su propio Inicio.
+  const myTeamStatus = useMemo(() => {
+    if (myManagedGroupIds.length === 0) return [];
+    const memberNames = new Set();
+    for (const g of groups) {
+      if (myManagedGroupIds.includes(g.id)) {
+        for (const n of g.memberNames || []) memberNames.add(n);
+      }
+    }
+    return Array.from(memberNames).map((name) => {
+      let pending = 0, overdue = 0;
+      for (const c of courses) {
+        if (!isAssignedToUser(c, name, groups)) continue;
+        if (getStatus(name, c.id) === "completada") continue;
+        pending++;
+        if (c.deadline && daysUntil(c.deadline) < 0) overdue++;
+      }
+      return { name, pending, overdue };
+    });
+  }, [myManagedGroupIds, groups, courses, completionsByCourse]);
+
   const assignedCountForUser = useMemo(() => {
     if (!currentUser) return 0;
     return courses.filter((c) => isAssignedToUser(c, currentUser, groups)).length;
@@ -2350,7 +2372,22 @@ export default function AulaVirtualMB() {
             courses={courses}
             getStatus={getStatus}
             onOpenCourse={openCourse}
-            onOpenRoutes={() => setView("routes")}
+            onContinuePath={(path) => {
+              const pathCourses = path.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+              const next = currentUser ? pathCourses.find((c) => getStatus(currentUser, c.id) !== "completada") : pathCourses[0];
+              setSelectedPathId(path.id);
+              if (next) {
+                openCourse(next.id, "path");
+              } else {
+                setView("path-detail");
+              }
+            }}
+            onGoToCatalog={() => {
+              setSelectedCatalogCategory(null);
+              setView("catalog");
+            }}
+            myTeamStatus={myTeamStatus}
+            onOpenTeam={() => setView("team")}
             onOpenNewsLink={(item) => {
               if (item.linkType === "course" && item.linkId) {
                 openCourse(item.linkId);
@@ -2395,6 +2432,7 @@ export default function AulaVirtualMB() {
             onOpenCourse={openCourse}
             selectedCategory={selectedCatalogCategory}
             onSelectCategory={setSelectedCatalogCategory}
+            paths={paths}
           />
         )}
         {view === "course" && activeCourse && (
@@ -2554,7 +2592,7 @@ function StatusPill({ icon: Icon, label, variant }) {
   );
 }
 
-function CourseCard({ course, status, onOpen }) {
+function CourseCard({ course, status, onOpen, pathTitle }) {
   const meta = categoryMeta(course.category);
   const completed = status === "completada";
   const days = course.deadline ? daysUntil(course.deadline) : null;
@@ -2583,6 +2621,12 @@ function CourseCard({ course, status, onOpen }) {
           <CategoryTag id={course.category} small />
           <DeadlineChip deadline={course.deadline} completed={completed} />
         </div>
+
+        {pathTitle && (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, color: "var(--info)" }}>
+            <Map size={11} /> Parte de la ruta: {pathTitle}
+          </div>
+        )}
 
         {/* Title */}
         <div style={{ fontSize: "var(--text-base)", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.35 }}>
@@ -2620,7 +2664,7 @@ function CourseCard({ course, status, onOpen }) {
 
 /* ── HOME ── */
 
-function WelcomeBar({ currentUser, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level }) {
+function WelcomeBar({ currentUser, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges }) {
   if (!currentUser) return null;
   const firstName = currentUser.split(" ")[0];
   const hour = new Date().getHours();
@@ -2636,30 +2680,37 @@ function WelcomeBar({ currentUser, pendingForUser, completedForUser, assignedCou
   else if (overdueCount > 0) { statusVariant = "danger"; statusIcon = AlertTriangle; statusLabel = `${overdueCount} vencida${overdueCount === 1 ? "" : "s"}`; }
 
   return (
-    <div style={{ ...DS.card, padding: "var(--sp-5)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-4)", flexWrap: "wrap" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
-        <Avatar name={currentUser} size={44} />
-        <div>
-          <div style={{ fontSize: "var(--text-lg)", fontWeight: 600, color: "var(--text-primary)" }}>
-            {greeting}, {firstName}
-          </div>
-          <div style={{ marginTop: 4 }}>
-            <StatusPill icon={statusIcon} label={statusLabel} variant={statusVariant} />
-          </div>
-        </div>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-5)" }}>
-        {!noneAssigned && (
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
-            <Trophy size={16} style={{ color: level.color }} />
-            <div>
-              <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-primary)" }}>{points} pts · {level.name}</div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{level.nextMin != null ? `${level.nextMin - points} para subir` : "Máximo"}</div>
+    <div style={{ ...DS.card, padding: "var(--sp-5)", display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-4)", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+          <Avatar name={currentUser} size={44} />
+          <div>
+            <div style={{ fontSize: "var(--text-lg)", fontWeight: 600, color: "var(--text-primary)" }}>
+              {greeting}, {firstName}
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <StatusPill icon={statusIcon} label={statusLabel} variant={statusVariant} />
             </div>
           </div>
-        )}
-        {!noneAssigned && <ProgressRing percent={progressPercent} size={52} color="var(--brand)" label={`${completedForUser.length}/${assignedCountForUser}`} />}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-5)" }}>
+          {!noneAssigned && (
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+              <Trophy size={16} style={{ color: level.color }} />
+              <div>
+                <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-primary)" }}>{points} pts · {level.name}</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{level.nextMin != null ? `${level.nextMin - points} para subir` : "Máximo"}</div>
+              </div>
+            </div>
+          )}
+          {!noneAssigned && <ProgressRing percent={progressPercent} size={52} color="var(--brand)" label={`${completedForUser.length}/${assignedCountForUser}`} />}
+        </div>
       </div>
+      {badges && badges.length > 0 && (
+        <div style={{ paddingTop: "var(--sp-2)", borderTop: "1px solid var(--border)" }}>
+          <BadgesRow badges={badges} />
+        </div>
+      )}
     </div>
   );
 }
@@ -2702,20 +2753,81 @@ function ContinueCard({ course, onOpen }) {
   );
 }
 
-function QuickStats({ pending, completed, total, progressPercent }) {
-  const stats = [
-    { label: "Pendientes", value: pending, color: pending > 0 ? "var(--warning)" : "var(--text-muted)" },
-    { label: "Completadas", value: completed, color: "var(--success)" },
-    { label: "Progreso", value: `${progressPercent}%`, color: "var(--brand)" },
-  ];
+function RouteCard({ path, courses, currentUser, getStatus, onContinue }) {
+  if (!path) return null;
+  const pathCourses = path.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+  const doneCount = pathCourses.filter((c) => getStatus(currentUser, c.id) === "completada").length;
+  const percent = pathCourses.length ? Math.round((doneCount / pathCourses.length) * 100) : 0;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "var(--sp-3)" }}>
-      {stats.map((s) => (
-        <div key={s.label} style={{ padding: "var(--sp-4)", borderRadius: "var(--radius-lg)", backgroundColor: "var(--bg-inset)", textAlign: "center" }}>
-          <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: s.color }}>{s.value}</div>
-          <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: 2 }}>{s.label}</div>
+    <div style={{ ...DS.card, padding: "var(--sp-5)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-4)", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-4)", flex: 1, minWidth: 200 }}>
+        <div style={{ width: 48, height: 48, borderRadius: "var(--radius-lg)", backgroundColor: "var(--info-soft)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Map size={22} style={{ color: "var(--info)" }} />
         </div>
-      ))}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text-muted)", marginBottom: 2 }}>Ruta en marcha</div>
+          <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.3 }}>{path.title}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+            <div style={{ flex: 1, maxWidth: 140, height: 6, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${percent}%`, backgroundColor: "var(--info)", borderRadius: "var(--radius-full)" }} />
+            </div>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{doneCount}/{pathCourses.length}</span>
+          </div>
+        </div>
+      </div>
+      <button
+        onClick={onContinue}
+        style={{
+          padding: "8px 20px", borderRadius: "var(--radius-md)",
+          backgroundColor: "var(--info)", color: "var(--text-inverse)",
+          border: "none", cursor: "pointer", fontSize: "var(--text-sm)",
+          fontWeight: 600, display: "flex", alignItems: "center", gap: 6,
+        }}
+      >
+        Continuar <ChevronRight size={15} />
+      </button>
+    </div>
+  );
+}
+
+function TeamStatusPanel({ teamStatus, onOpenTeam }) {
+  const withIssues = teamStatus.filter((m) => m.pending > 0).sort((a, b) => b.overdue - a.overdue || b.pending - a.pending);
+  const allGood = withIssues.length === 0;
+  return (
+    <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: allGood ? 0 : "var(--sp-3)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Users size={16} style={{ color: "var(--brand)" }} />
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>Tu equipo</span>
+        </div>
+        <button onClick={onOpenTeam} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+          Ver todo <ChevronRight size={13} />
+        </button>
+      </div>
+      {allGood ? (
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--success-text)", display: "flex", alignItems: "center", gap: 6 }}>
+          <CheckCircle2 size={14} /> Todo tu equipo está al día.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {withIssues.slice(0, 5).map((m) => (
+            <div key={m.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <Avatar name={m.name} size={22} />
+                <span style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</span>
+              </div>
+              <StatusPill
+                icon={m.overdue > 0 ? AlertTriangle : Clock}
+                label={m.overdue > 0 ? `${m.overdue} vencida${m.overdue === 1 ? "" : "s"}` : `${m.pending} pendiente${m.pending === 1 ? "" : "s"}`}
+                variant={m.overdue > 0 ? "danger" : "warning"}
+              />
+            </div>
+          ))}
+          {withIssues.length > 5 && (
+            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>y {withIssues.length - 5} persona{withIssues.length - 5 === 1 ? "" : "s"} más con algo pendiente…</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2742,7 +2854,7 @@ function BadgesRow({ badges }) {
   );
 }
 
-function NewsCard({ item, featured, onOpen }) {
+function NewsCard({ item, featured, onOpen, isDone }) {
   const cat = item.linkType === "category" ? categoryMeta(item.linkId) : null;
   const accentColor = cat ? cat.color : "var(--info)";
   const clickable = item.linkType === "course" || item.linkType === "category";
@@ -2756,6 +2868,7 @@ function NewsCard({ item, featured, onOpen }) {
       style={{
         ...DS.card, cursor: clickable ? "pointer" : "default",
         display: "flex", transition: "all var(--dur-base) var(--ease-out)",
+        opacity: isDone ? 0.65 : 1,
       }}
       onMouseEnter={(e) => { if (clickable) Object.assign(e.currentTarget.style, DS.cardHover, { transform: "translateY(-1px)" }); }}
       onMouseLeave={(e) => { if (clickable) Object.assign(e.currentTarget.style, { boxShadow: "none", transform: "none", borderColor: "var(--border)" }); }}
@@ -2764,7 +2877,7 @@ function NewsCard({ item, featured, onOpen }) {
       <div style={{ padding: featured ? "var(--sp-5)" : "var(--sp-4)", flex: 1 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: "var(--sp-2)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {isNew && <StatusPill label="Nuevo" variant="success" />}
+            {isNew && !isDone && <StatusPill label="Nuevo" variant="success" />}
             <span style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
               <Icon size={11} /> {cat ? cat.label : "General"}
             </span>
@@ -2776,25 +2889,34 @@ function NewsCard({ item, featured, onOpen }) {
         </div>
         {featured && item.body && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: 1.5, marginTop: "var(--sp-2)" }}>{item.body}</div>}
         {clickable && (
-          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)", display: "flex", alignItems: "center", gap: 4, marginTop: "var(--sp-3)" }}>
-            {item.linkType === "course" ? "Ir a la formación" : "Ver campo"} <ChevronRight size={13} />
-          </div>
+          isDone ? (
+            <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--success)", display: "flex", alignItems: "center", gap: 4, marginTop: "var(--sp-3)" }}>
+              <CheckCircle2 size={13} /> Ya completada
+            </div>
+          ) : (
+            <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)", display: "flex", alignItems: "center", gap: 4, marginTop: "var(--sp-3)" }}>
+              {item.linkType === "course" ? "Ir a la formación" : "Ver campo"} <ChevronRight size={13} />
+            </div>
+          )
         )}
       </div>
     </div>
   );
 }
 
-function NewsPanel({ news, onOpenNewsLink }) {
+function NewsPanel({ news, onOpenNewsLink, currentUser, getStatus }) {
   if (news.length === 0) return null;
   const [featured, ...rest] = news;
+  function isItemDone(item) {
+    return !!(currentUser && item.linkType === "course" && item.linkId && getStatus(currentUser, item.linkId) === "completada");
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
-      <NewsCard item={featured} featured onOpen={() => onOpenNewsLink(featured)} />
+      <NewsCard item={featured} featured onOpen={() => onOpenNewsLink(featured)} isDone={isItemDone(featured)} />
       {rest.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-3)" }}>
           {rest.slice(0, 4).map((n) => (
-            <NewsCard key={n.id} item={n} onOpen={() => onOpenNewsLink(n)} />
+            <NewsCard key={n.id} item={n} onOpen={() => onOpenNewsLink(n)} isDone={isItemDone(n)} />
           ))}
         </div>
       )}
@@ -2802,42 +2924,23 @@ function NewsPanel({ news, onOpenNewsLink }) {
   );
 }
 
-function Dashboard({ currentUser, news, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges, pendingPaths, courses, getStatus, onOpenCourse, onOpenRoutes, onOpenNewsLink }) {
-  // Formación más urgente para "Continuar"
-  const continueTarget = pendingForUser.length > 0 ? pendingForUser[0] : null;
+function Dashboard({ currentUser, news, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges, pendingPaths, courses, getStatus, onOpenCourse, onContinuePath, onOpenNewsLink, onGoToCatalog, myTeamStatus, onOpenTeam }) {
+  const topPending = pendingForUser.length > 0 ? pendingForUser[0] : null;
+  const topIsOverdue = !!(topPending && topPending.deadline && daysUntil(topPending.deadline) < 0);
+  const activePath = pendingPaths && pendingPaths.length > 0 ? pendingPaths[0] : null;
+
+  // Prioridad de la tarjeta principal: una formación vencida se cuela siempre
+  // por delante; si no hay nada vencido, manda la ruta en marcha; si no hay
+  // ruta, la formación pendiente más urgente de siempre.
+  let mainCardType = "none";
+  if (topIsOverdue) mainCardType = "course";
+  else if (activePath) mainCardType = "path";
+  else if (topPending) mainCardType = "course";
+
+  const remainingPendingCount = pendingForUser.length - (mainCardType === "course" && topPending ? 1 : 0);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
-      {currentUser && pendingPaths && pendingPaths.length > 0 && (
-        <button
-          onClick={onOpenRoutes}
-          style={{
-            ...DS.card, textAlign: "left", cursor: "pointer", padding: "var(--sp-4)",
-            display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-3)", flexWrap: "wrap",
-            borderLeft: "4px solid var(--info)", transition: "all var(--dur-base) var(--ease-out)",
-          }}
-          onMouseEnter={(e) => Object.assign(e.currentTarget.style, { boxShadow: "var(--shadow-md)" })}
-          onMouseLeave={(e) => Object.assign(e.currentTarget.style, { boxShadow: "none" })}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", minWidth: 0 }}>
-            <div style={{ width: 36, height: 36, borderRadius: "var(--radius-md)", backgroundColor: "var(--info-soft)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <Map size={17} style={{ color: "var(--info)" }} />
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
-                Tienes {pendingPaths.length} ruta{pendingPaths.length === 1 ? "" : "s"} de aprendizaje en marcha
-              </div>
-              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {pendingPaths.map((p) => p.title).join(" · ")}
-              </div>
-            </div>
-          </div>
-          <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-            Ver rutas <ChevronRight size={14} />
-          </span>
-        </button>
-      )}
-
       <WelcomeBar
         currentUser={currentUser}
         pendingForUser={pendingForUser}
@@ -2846,44 +2949,33 @@ function Dashboard({ currentUser, news, pendingForUser, completedForUser, assign
         progressPercent={progressPercent}
         points={points}
         level={level}
+        badges={badges}
       />
 
-      {currentUser && continueTarget && (
-        <ContinueCard course={continueTarget} onOpen={() => onOpenCourse(continueTarget.id)} />
+      {myTeamStatus && myTeamStatus.length > 0 && (
+        <TeamStatusPanel teamStatus={myTeamStatus} onOpenTeam={onOpenTeam} />
       )}
 
-      {currentUser && assignedCountForUser > 0 && (
-        <QuickStats pending={pendingForUser.length} completed={completedForUser.length} total={assignedCountForUser} progressPercent={progressPercent} />
+      {mainCardType === "path" && (
+        <RouteCard path={activePath} courses={courses} currentUser={currentUser} getStatus={getStatus} onContinue={() => onContinuePath(activePath)} />
+      )}
+      {mainCardType === "course" && topPending && (
+        <ContinueCard course={topPending} onOpen={() => onOpenCourse(topPending.id)} />
       )}
 
-      {currentUser && badges.length > 0 && <BadgesRow badges={badges} />}
-
-      {currentUser && pendingForUser.length > 1 && (
-        <div>
-          <SectionTitle icon={Clock}>Formaciones pendientes</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
-            {pendingForUser.slice(1).map((c) => (
-              <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
-            ))}
-          </div>
-        </div>
+      {remainingPendingCount > 0 && (
+        <button
+          onClick={onGoToCatalog}
+          style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer", textAlign: "left", padding: 0, display: "flex", alignItems: "center", gap: 4, width: "fit-content" }}
+        >
+          Y {remainingPendingCount} formación{remainingPendingCount === 1 ? "" : "es"} más pendiente{remainingPendingCount === 1 ? "" : "s"} <ChevronRight size={14} />
+        </button>
       )}
 
       {news.length > 0 && (
         <div>
           <SectionTitle icon={Newspaper}>Novedades</SectionTitle>
-          <NewsPanel news={news} onOpenNewsLink={onOpenNewsLink} />
-        </div>
-      )}
-
-      {currentUser && completedForUser.length > 0 && (
-        <div>
-          <SectionTitle icon={CheckCircle2}>Completadas</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)", opacity: 0.7 }}>
-            {completedForUser.map((c) => (
-              <CourseCard key={c.id} course={c} status="completada" onOpen={() => onOpenCourse(c.id)} />
-            ))}
-          </div>
+          <NewsPanel news={news} onOpenNewsLink={onOpenNewsLink} currentUser={currentUser} getStatus={getStatus} />
         </div>
       )}
     </div>
@@ -3137,10 +3229,22 @@ function CategoryPicker({ onSelectCategory }) {
   );
 }
 
-function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory }) {
+function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory, paths = [] }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses;
+
+  // Mapa courseId -> título de la primera ruta a la que pertenece (si alguna),
+  // para la etiqueta "Parte de la ruta: ..." en las tarjetas.
+  const pathTitleByCourseId = useMemo(() => {
+    const map = {};
+    for (const p of paths) {
+      for (const cid of p.courseIds) {
+        if (!map[cid]) map[cid] = p.title;
+      }
+    }
+    return map;
+  }, [paths]);
 
   if (visibleCourses.length === 0) {
     return (
@@ -3197,7 +3301,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
             {matches.map((c) => (
-              <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} />
+              <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} pathTitle={pathTitleByCourseId[c.id]} />
             ))}
           </div>
         )}
@@ -3244,7 +3348,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
           {pendingCourses.map((c) => (
-            <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} />
+            <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} pathTitle={pathTitleByCourseId[c.id]} />
           ))}
         </div>
       )}
@@ -4224,6 +4328,22 @@ function AdminPanel({
     }
     return result;
   }, [completionsByCourse, courses]);
+
+  // Cumplimiento por ruta de aprendizaje: de toda la gente a la que le toca una
+  // ruta, cuántos la han terminado ENTERA (todas sus formaciones completadas).
+  // No usa getStatus (que vive en el componente principal) — comprueba el
+  // estado guardado directamente, que es suficiente para este resumen.
+  const pathCompletionSummary = useMemo(() => {
+    return paths.map((p) => {
+      const assignedEmployees = employees.filter((e) => isAssignedToUser(p, e.name, groups));
+      let doneCount = 0;
+      for (const emp of assignedEmployees) {
+        const allDone = p.courseIds.every((cid) => completionsByCourse[cid]?.[emp.name]?.status === "completada");
+        if (allDone) doneCount++;
+      }
+      return { id: p.id, title: p.title, assignedCount: assignedEmployees.length, doneCount };
+    });
+  }, [paths, employees, groups, completionsByCourse]);
 
   const pendingReportRows = useMemo(() => {
     const rows = [];
@@ -5307,6 +5427,31 @@ function AdminPanel({
               </button>
             </div>
           </div>
+
+          {paths.length > 0 && (
+            <div>
+              <div className="font-bold text-sm mb-2" style={{ color: "var(--text-primary)" }}>Cumplimiento por ruta de aprendizaje</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--sp-3)", marginBottom: "var(--sp-4)" }}>
+                {pathCompletionSummary.map((p) => {
+                  const percent = p.assignedCount > 0 ? Math.round((p.doneCount / p.assignedCount) * 100) : 0;
+                  return (
+                    <div key={p.id} style={{ ...DS.card, padding: "var(--sp-3)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                        <Map size={13} style={{ color: "var(--info)" }} />
+                        <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{p.title}</div>
+                      </div>
+                      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: 6 }}>
+                        {p.doneCount}/{p.assignedCount} personas completada la ruta entera
+                      </div>
+                      <div style={{ height: 6, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${percent}%`, backgroundColor: percent === 100 ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="rounded-xl border bg-white overflow-hidden shadow-sm" style={{ borderColor: "#00000012" }}>
             <table className="w-full text-sm">
