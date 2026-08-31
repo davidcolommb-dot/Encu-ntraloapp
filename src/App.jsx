@@ -6,6 +6,7 @@ import {
   Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
+import { PublicClientApplication } from "@azure/msal-browser";
 import * as XLSX from "xlsx";
 
 // Credenciales de Supabase: se leen de variables de entorno (ver .env.example).
@@ -14,6 +15,37 @@ import * as XLSX from "xlsx";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Inicio de sesión con la cuenta de Microsoft 365 (opcional — convive con el
+// acceso por nombre y contraseña, no lo sustituye). Solo se activa si estas
+// dos variables están rellenas; si no, el botón simplemente no aparece, para
+// no romper nada en despliegues donde todavía no se haya configurado Azure.
+const msalClientId = import.meta.env.VITE_MSAL_CLIENT_ID || "";
+const msalTenantId = import.meta.env.VITE_MSAL_TENANT_ID || "";
+const msalIsConfigured = !!(msalClientId && msalTenantId);
+let msalInstancePromise = null;
+function getMsalInstance() {
+  if (!msalInstancePromise) {
+    const pca = new PublicClientApplication({
+      auth: {
+        clientId: msalClientId,
+        authority: `https://login.microsoftonline.com/${msalTenantId}`,
+        redirectUri: window.location.origin,
+      },
+      cache: { cacheLocation: "sessionStorage" },
+    });
+    msalInstancePromise = pca.initialize().then(() => pca);
+  }
+  return msalInstancePromise;
+}
+// Abre la ventana de acceso de Microsoft y devuelve el email + nombre de la
+// persona una vez confirmada su identidad. No devuelve ninguna contraseña —
+// eso lo comprueba Microsoft, nunca esta aplicación.
+async function loginWithMicrosoftPopup() {
+  const pca = await getMsalInstance();
+  const result = await pca.loginPopup({ scopes: ["User.Read"] });
+  return { email: result.account.username, name: result.account.name };
+}
 
 const BRAND = {
   red: "#E9312B",
@@ -1072,6 +1104,18 @@ function TextField({ label, value, onChange, type = "text", placeholder, onEnter
   );
 }
 
+function MicrosoftLogo({ size = 16 }) {
+  const s = size / 2;
+  return (
+    <svg width={size} height={size} viewBox="0 0 21 21" style={{ flexShrink: 0 }}>
+      <rect x="1" y="1" width="9" height="9" fill="#F25022" />
+      <rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
+      <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
+      <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
+    </svg>
+  );
+}
+
 function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCreatePassword, onAdminLogin, onAdminSetup }) {
   // menu | employee-password | employee-verify-email | employee-create-password | admin-password | admin-create-password
   const [mode, setMode] = useState("menu");
@@ -1082,6 +1126,29 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
   const [newPass2, setNewPass2] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [msBusy, setMsBusy] = useState(false);
+  const [msError, setMsError] = useState("");
+
+  async function handleMicrosoftLogin() {
+    setMsError("");
+    setMsBusy(true);
+    try {
+      const { email } = await loginWithMicrosoftPopup();
+      const normalized = email.trim().toLowerCase();
+      const match = employees.find((e) => e.email && e.email.trim().toLowerCase() === normalized);
+      if (match) {
+        onEmployeeLogin(match.name);
+      } else {
+        setMsError(`Tu cuenta de Microsoft (${email}) todavía no está registrada aquí. Pide a tu administrador que te dé de alta con este mismo email.`);
+      }
+    } catch (err) {
+      if (err?.errorCode !== "user_cancelled") {
+        setMsError("No se pudo completar el inicio de sesión con Microsoft. Inténtalo de nuevo.");
+      }
+    } finally {
+      setMsBusy(false);
+    }
+  }
 
   function normalize(s) {
     return s.trim().replace(/\s+/g, " ").toLowerCase();
@@ -1185,6 +1252,25 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
 
         {mode === "menu" && (
           <div>
+            {msalIsConfigured && (
+              <>
+                <button
+                  disabled={msBusy}
+                  onClick={handleMicrosoftLogin}
+                  className="w-full flex items-center justify-center gap-2.5 text-sm font-semibold rounded-lg py-2.5 border transition hover:bg-gray-50 disabled:opacity-60"
+                  style={{ borderColor: "var(--border)", color: "var(--text-primary)" }}
+                >
+                  {msBusy ? <Loader2 size={15} className="animate-spin" /> : <MicrosoftLogo size={15} />}
+                  Iniciar sesión con Microsoft
+                </button>
+                {msError && <div className="text-xs mt-2" style={{ color: "var(--danger)" }}>{msError}</div>}
+                <div className="flex items-center gap-2 my-4">
+                  <div className="flex-1 h-px bg-gray-100" />
+                  <span className="text-[11px] text-gray-400">o con tu nombre y contraseña</span>
+                  <div className="flex-1 h-px bg-gray-100" />
+                </div>
+              </>
+            )}
             {employees.length === 0 ? (
               <div className="text-sm text-gray-500 text-center py-4 px-2">
                 Todavía no hay empleados registrados. Entra como administrador para añadir el primero.
@@ -1667,6 +1753,17 @@ export default function AulaVirtualMB() {
     return paths.filter((p) => isAssignedToUser(p, currentUser, groups));
   }, [paths, currentUser, groups]);
 
+  // Rutas que todavía no ha terminado (al menos una formación pendiente dentro)
+  // — esto es lo que dispara el aviso en Inicio y el número en la pestaña "Rutas".
+  const pendingPathsForUser = useMemo(() => {
+    if (!currentUser) return [];
+    return pathsForUser.filter((p) => {
+      const pathCourses = p.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+      if (pathCourses.length === 0) return false;
+      return pathCourses.some((c) => getStatus(currentUser, c.id) !== "completada");
+    });
+  }, [pathsForUser, courses, currentUser, completionsByCourse]);
+
   // Si la persona que ha iniciado sesión es responsable de algún equipo, esto
   // no está vacío — determina si ve la pestaña "Mi equipo" y con qué alcance.
   const myManagedGroupIds = useMemo(() => {
@@ -2128,7 +2225,7 @@ export default function AulaVirtualMB() {
                 { id: "dashboard", label: "Inicio", icon: Home },
                 ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
                 { id: "catalog", label: "Catálogo", icon: LayoutGrid },
-                ...(currentUser ? [{ id: "routes", label: "Rutas", icon: Map }] : []),
+                ...(currentUser ? [{ id: "routes", label: "Rutas", icon: Map, count: pendingPathsForUser.length }] : []),
                 ...(myManagedGroupIds.length > 0 ? [{ id: "team", label: "Mi equipo", icon: Users }] : []),
                 ...(isAdmin ? [{ id: "admin", label: "Admin", icon: Settings }] : []),
               ].map((t) => {
@@ -2244,7 +2341,11 @@ export default function AulaVirtualMB() {
             points={pointsForUser}
             level={levelForUser}
             badges={badgesForUser}
+            pendingPaths={pendingPathsForUser}
+            courses={courses}
+            getStatus={getStatus}
             onOpenCourse={openCourse}
+            onOpenRoutes={() => setView("routes")}
             onOpenNewsLink={(item) => {
               if (item.linkType === "course" && item.linkId) {
                 openCourse(item.linkId);
@@ -2693,12 +2794,42 @@ function NewsPanel({ news, onOpenNewsLink }) {
   );
 }
 
-function Dashboard({ currentUser, news, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges, onOpenCourse, onOpenNewsLink }) {
+function Dashboard({ currentUser, news, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges, pendingPaths, courses, getStatus, onOpenCourse, onOpenRoutes, onOpenNewsLink }) {
   // Formación más urgente para "Continuar"
   const continueTarget = pendingForUser.length > 0 ? pendingForUser[0] : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
+      {currentUser && pendingPaths && pendingPaths.length > 0 && (
+        <button
+          onClick={onOpenRoutes}
+          style={{
+            ...DS.card, textAlign: "left", cursor: "pointer", padding: "var(--sp-4)",
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-3)", flexWrap: "wrap",
+            borderLeft: "4px solid var(--info)", transition: "all var(--dur-base) var(--ease-out)",
+          }}
+          onMouseEnter={(e) => Object.assign(e.currentTarget.style, { boxShadow: "var(--shadow-md)" })}
+          onMouseLeave={(e) => Object.assign(e.currentTarget.style, { boxShadow: "none" })}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", minWidth: 0 }}>
+            <div style={{ width: 36, height: 36, borderRadius: "var(--radius-md)", backgroundColor: "var(--info-soft)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <Map size={17} style={{ color: "var(--info)" }} />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
+                Tienes {pendingPaths.length} ruta{pendingPaths.length === 1 ? "" : "s"} de aprendizaje en marcha
+              </div>
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {pendingPaths.map((p) => p.title).join(" · ")}
+              </div>
+            </div>
+          </div>
+          <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+            Ver rutas <ChevronRight size={14} />
+          </span>
+        </button>
+      )}
+
       <WelcomeBar
         currentUser={currentUser}
         pendingForUser={pendingForUser}
