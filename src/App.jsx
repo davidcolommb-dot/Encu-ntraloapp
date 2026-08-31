@@ -1142,8 +1142,13 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
         setMsError(`Tu cuenta de Microsoft (${email}) todavía no está registrada aquí. Pide a tu administrador que te dé de alta con este mismo email.`);
       }
     } catch (err) {
+      console.error("Error de inicio de sesión con Microsoft:", err);
       if (err?.errorCode !== "user_cancelled") {
-        setMsError("No se pudo completar el inicio de sesión con Microsoft. Inténtalo de nuevo.");
+        // Mostramos el detalle técnico (código + mensaje de MSAL) para poder
+        // diagnosticar problemas de configuración de Azure — no es un dato
+        // sensible, es información de depuración normal en este tipo de fallo.
+        const detail = err?.errorCode ? `${err.errorCode}${err.errorMessage ? " — " + err.errorMessage.split("\n")[0] : ""}` : String(err?.message || err);
+        setMsError(`No se pudo completar el inicio de sesión con Microsoft. Detalle: ${detail}`);
       }
     } finally {
       setMsBusy(false);
