@@ -2475,6 +2475,9 @@ export default function AulaVirtualMB() {
             onResetEmployeePassword={resetEmployeePassword}
             onUpdateEmployeeEmail={updateEmployeeEmail}
             onUpdateEmployeeManagedGroups={updateEmployeeManagedGroups}
+            paths={paths}
+            onSavePath={savePath}
+            onDeletePath={deletePath}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
@@ -3731,7 +3734,7 @@ function TextInput({ label, value, onChange, placeholder, type = "text" }) {
   );
 }
 
-function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDeletePath }) {
+function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDeletePath, mode = "full" }) {
   const emptyAssignment = { mode: "todos", groupIds: [], employeeNames: [] };
   const [editingId, setEditingId] = useState(undefined); // undefined = lista, null = nueva, id = editando
   const [title, setTitle] = useState("");
@@ -3929,13 +3932,15 @@ function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDelete
         )}
       </div>
 
-      <div style={{ ...DS.card, padding: "var(--sp-3)", display: "flex", alignItems: "center", gap: 10 }}>
-        <input type="checkbox" checked={isWelcomePath} onChange={(e) => setIsWelcomePath(e.target.checked)} id="welcome-path-check" />
-        <label htmlFor="welcome-path-check" style={{ fontSize: "var(--text-sm)", cursor: "pointer" }}>
-          <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>Ruta de bienvenida</span>
-          <span style={{ color: "var(--text-muted)" }}> — se asigna sola a cada persona nueva que se dé de alta, además de a quien ya hayas asignado arriba.</span>
-        </label>
-      </div>
+      {mode !== "team" && (
+        <div style={{ ...DS.card, padding: "var(--sp-3)", display: "flex", alignItems: "center", gap: 10 }}>
+          <input type="checkbox" checked={isWelcomePath} onChange={(e) => setIsWelcomePath(e.target.checked)} id="welcome-path-check" />
+          <label htmlFor="welcome-path-check" style={{ fontSize: "var(--text-sm)", cursor: "pointer" }}>
+            <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>Ruta de bienvenida</span>
+            <span style={{ color: "var(--text-muted)" }}> — se asigna sola a cada persona nueva que se dé de alta, además de a quien ya hayas asignado arriba.</span>
+          </label>
+        </div>
+      )}
 
       <button
         disabled={!title.trim() || courseIds.length === 0}
@@ -4273,6 +4278,7 @@ function AdminPanel({
             ? [
                 { id: "courses", label: "Formaciones" },
                 { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
+                { id: "paths", label: "Rutas" },
                 { id: "team", label: "Mi equipo" },
               ]
             : [
@@ -4708,8 +4714,8 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "paths" && mode !== "team" && (
-        <PathsAdminTab paths={paths} courses={courses} groups={groups} employees={employees} onSavePath={onSavePath} onDeletePath={onDeletePath} />
+      {tab === "paths" && (
+        <PathsAdminTab paths={paths} courses={courses} groups={groups} employees={employees} onSavePath={onSavePath} onDeletePath={onDeletePath} mode={mode} />
       )}
 
       {tab === "news" && mode !== "team" && (
