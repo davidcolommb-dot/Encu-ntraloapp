@@ -3,7 +3,7 @@ import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
   Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp, ChevronRight,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
-  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search
+  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
@@ -219,7 +219,12 @@ function getVideoEmbedUrl(url) {
 
 function isAssignedToUser(course, userName, groups) {
   const a = course.assignment;
-  if (!a || a.mode === "todos") return true;
+  if (!a) return true;
+  // Nombres añadidos automáticamente (p. ej. por la ruta de bienvenida al dar de
+  // alta a alguien nuevo) cuentan siempre, sin importar el modo de asignación —
+  // así no hace falta tocar "todos/grupos/personas" para que esto funcione.
+  if ((a.extraNames || []).includes(userName)) return true;
+  if (a.mode === "todos") return true;
   if (a.mode === "individual") return (a.employeeNames || []).includes(userName);
   if (a.mode === "grupos") {
     const userGroupIds = groups.filter((g) => (g.memberNames || []).includes(userName)).map((g) => g.id);
@@ -1356,6 +1361,7 @@ export default function AulaVirtualMB() {
   const [completionsByCourse, setCompletionsByCourse] = useState({});
   const [employees, setEmployees] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [paths, setPaths] = useState([]);
   const [adminPasswordHash, setAdminPasswordHash] = useState("");
   const [lastBackupAt, setLastBackupAt] = useState(null);
   const [sheetsUrl, setSheetsUrl] = useState("");
@@ -1366,6 +1372,8 @@ export default function AulaVirtualMB() {
   const [view, setView] = useState("dashboard");
   const [selectedCatalogCategory, setSelectedCatalogCategory] = useState(null);
   const [activeCourseId, setActiveCourseId] = useState(null);
+  const [courseOrigin, setCourseOrigin] = useState("catalog");
+  const [selectedPathId, setSelectedPathId] = useState(null);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
 
@@ -1376,7 +1384,7 @@ export default function AulaVirtualMB() {
 
   useEffect(() => {
     (async () => {
-      const [c, n, emp, grp, pwHash, lastBk, sUrl] = await Promise.all([
+      const [c, n, emp, grp, pwHash, lastBk, sUrl, pth] = await Promise.all([
         loadKey("mb_courses", null),
         loadKey("mb_news", null),
         loadKey("mb_employees", []),
@@ -1384,6 +1392,7 @@ export default function AulaVirtualMB() {
         loadKey("mb_admin_pin", ""),
         loadKey("mb_last_backup_at", null),
         loadKey("mb_sheets_webapp_url", ""),
+        loadKey("mb_paths", []),
       ]);
       let finalCourses = c;
       let finalNews = n;
@@ -1416,6 +1425,7 @@ export default function AulaVirtualMB() {
       setAdminPasswordHash(isValidHash(pwHash) ? pwHash : "");
       setLastBackupAt(lastBk);
       setSheetsUrl(sUrl || "");
+      setPaths(pth || []);
 
       // Sesión recordada en este navegador: si hay una guardada y sigue siendo válida,
       // entra directamente sin volver a pedir nombre/contraseña.
@@ -1479,10 +1489,11 @@ export default function AulaVirtualMB() {
     await saveKey(`mb_completions_course_${courseId}`, updated);
   }
 
-  async function openCourse(courseId) {
+  async function openCourse(courseId, origin = "catalog") {
     setActiveCourseId(courseId);
     setQuizAnswers({});
     setQuizResult(null);
+    setCourseOrigin(origin);
     setView("course");
     await ensureCourseCompletionsLoaded(courseId);
     markStarted(courseId);
@@ -1651,6 +1662,11 @@ export default function AulaVirtualMB() {
   const dueSoonForUser = useMemo(() => pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) >= 0 && daysUntil(c.deadline) <= 3), [pendingForUser]);
   const alertCount = overdueForUser.length + dueSoonForUser.length;
 
+  const pathsForUser = useMemo(() => {
+    if (!currentUser) return [];
+    return paths.filter((p) => isAssignedToUser(p, currentUser, groups));
+  }, [paths, currentUser, groups]);
+
   // Si la persona que ha iniciado sesión es responsable de algún equipo, esto
   // no está vacío — determina si ve la pestaña "Mi equipo" y con qué alcance.
   const myManagedGroupIds = useMemo(() => {
@@ -1706,6 +1722,24 @@ export default function AulaVirtualMB() {
     const updated = groups.map((g) => (g.id === id ? { ...g, memberNames } : g));
     setGroups(updated);
     saveKey("mb_groups", updated);
+  }
+
+  // Rutas de aprendizaje: encadenan formaciones completas ya existentes, en un
+  // orden fijo. No necesitan su propio sistema de progreso — se calcula sobre
+  // la marcha a partir del estado real de cada formación (getStatus), así que
+  // si alguien ya había completado una formación antes de que se creara la
+  // ruta, ya cuenta hecha dentro de la ruta también.
+  async function savePath(path) {
+    let updated;
+    if (paths.find((p) => p.id === path.id)) updated = paths.map((p) => (p.id === path.id ? path : p));
+    else updated = [...paths, path];
+    setPaths(updated);
+    await saveKey("mb_paths", updated);
+  }
+  async function deletePath(id) {
+    const updated = paths.filter((p) => p.id !== id);
+    setPaths(updated);
+    await saveKey("mb_paths", updated);
   }
 
   async function saveSheetsUrl(url) {
@@ -1795,9 +1829,31 @@ export default function AulaVirtualMB() {
 
   async function addEmployee(name, email) {
     if (!name.trim() || employees.some((e) => e.name === name.trim())) return;
-    const updated = [...employees, { name: name.trim(), passwordHash: null, email: email.trim() }];
+    const trimmedName = name.trim();
+    const updated = [...employees, { name: trimmedName, passwordHash: null, email: email.trim() }];
     setEmployees(updated);
-    saveKey("mb_employees", updated);
+    await saveKey("mb_employees", updated);
+    await assignWelcomePathsToNewEmployees([trimmedName]);
+  }
+
+  // Si hay alguna ruta marcada como "de bienvenida", cualquier persona nueva
+  // (dada de alta una a una o importada por Excel) queda apuntada a ella sola,
+  // sin que el administrador tenga que asignarla a mano cada vez. No toca el
+  // modo de asignación de la ruta (todos/grupos/personas) — solo añade a la
+  // lista de "extras" que isAssignedToUser también comprueba.
+  async function assignWelcomePathsToNewEmployees(newNames) {
+    if (newNames.length === 0) return;
+    const current = await loadKey("mb_paths", paths);
+    const welcomePaths = (current || []).filter((p) => p.isWelcomePath);
+    if (welcomePaths.length === 0) return;
+    const updated = (current || []).map((p) => {
+      if (!p.isWelcomePath) return p;
+      const existingExtra = p.assignment?.extraNames || [];
+      const merged = Array.from(new Set([...existingExtra, ...newNames]));
+      return { ...p, assignment: { ...(p.assignment || { mode: "individual", groupIds: [], employeeNames: [] }), extraNames: merged } };
+    });
+    setPaths(updated);
+    await saveKey("mb_paths", updated);
   }
   async function removeEmployee(name) {
     const updated = employees.filter((e) => e.name !== name);
@@ -1893,11 +1949,13 @@ export default function AulaVirtualMB() {
   async function importEmployeesBulk(rows) {
     let updatedEmployees = [...employees];
     let updatedGroups = [...groups];
+    const newlyCreatedNames = [];
 
     for (const row of rows) {
       const existingIdx = updatedEmployees.findIndex((e) => e.name.trim().toLowerCase() === row.name.trim().toLowerCase());
       if (existingIdx === -1) {
         updatedEmployees.push({ name: row.name, passwordHash: null, email: row.email || "" });
+        newlyCreatedNames.push(row.name);
       } else {
         updatedEmployees[existingIdx] = {
           ...updatedEmployees[existingIdx],
@@ -1922,6 +1980,7 @@ export default function AulaVirtualMB() {
     setGroups(updatedGroups);
     await saveKey("mb_employees", updatedEmployees);
     await saveKey("mb_groups", updatedGroups);
+    await assignWelcomePathsToNewEmployees(newlyCreatedNames);
   }
 
   async function saveCourse(course) {
@@ -2069,16 +2128,18 @@ export default function AulaVirtualMB() {
                 { id: "dashboard", label: "Inicio", icon: Home },
                 ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
                 { id: "catalog", label: "Catálogo", icon: LayoutGrid },
+                ...(currentUser ? [{ id: "routes", label: "Rutas", icon: Map }] : []),
                 ...(myManagedGroupIds.length > 0 ? [{ id: "team", label: "Mi equipo", icon: Users }] : []),
                 ...(isAdmin ? [{ id: "admin", label: "Admin", icon: Settings }] : []),
               ].map((t) => {
-                const active = view === t.id || (view === "course" && t.id === "catalog");
+                const active = view === t.id || (view === "course" && t.id === "catalog" && courseOrigin !== "path") || (view === "path-detail" && t.id === "routes") || (view === "course" && t.id === "routes" && courseOrigin === "path");
                 return (
                   <button
                     key={t.id}
                     className="mb-nav-btn"
                     onClick={() => {
                       if (t.id === "catalog" && view !== "course") setSelectedCatalogCategory(null);
+                      if (t.id === "routes") setSelectedPathId(null);
                       setView(t.id);
                     }}
                     style={{
@@ -2197,6 +2258,28 @@ export default function AulaVirtualMB() {
         {view === "alerts" && (
           <AlertsView overdueForUser={overdueForUser} dueSoonForUser={dueSoonForUser} onOpenCourse={openCourse} />
         )}
+        {view === "routes" && (
+          <RoutesListView
+            paths={pathsForUser}
+            courses={courses}
+            currentUser={currentUser}
+            getStatus={getStatus}
+            onOpenPath={(id) => {
+              setSelectedPathId(id);
+              setView("path-detail");
+            }}
+          />
+        )}
+        {view === "path-detail" && selectedPathId && (
+          <PathDetailView
+            path={paths.find((p) => p.id === selectedPathId)}
+            courses={courses}
+            currentUser={currentUser}
+            getStatus={getStatus}
+            onOpenCourse={(courseId) => openCourse(courseId, "path")}
+            onBack={() => setView("routes")}
+          />
+        )}
         {view === "catalog" && (
           <Catalog
             courses={courses}
@@ -2225,7 +2308,7 @@ export default function AulaVirtualMB() {
             }}
             onSelfReport={() => selfReportComplete(activeCourse.id)}
             onRateCourse={(rating, comment) => rateCourse(activeCourse.id, rating, comment)}
-            onBack={() => setView("catalog")}
+            onBack={() => setView(courseOrigin === "path" ? "path-detail" : "catalog")}
             onRetry={() => {
               setQuizAnswers({});
               setQuizResult(null);
@@ -2254,6 +2337,9 @@ export default function AulaVirtualMB() {
             onResetEmployeePassword={resetEmployeePassword}
             onUpdateEmployeeEmail={updateEmployeeEmail}
             onUpdateEmployeeManagedGroups={updateEmployeeManagedGroups}
+            paths={paths}
+            onSavePath={savePath}
+            onDeletePath={deletePath}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
@@ -2722,6 +2808,133 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
     </div>
   );
 }
+
+/* ---------- Rutas de aprendizaje (encadenan formaciones completas) ---------- */
+
+function RoutesListView({ paths, courses, currentUser, getStatus, onOpenPath }) {
+  if (paths.length === 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--sp-3)", padding: "var(--sp-16) 0", textAlign: "center" }}>
+        <div style={{ width: 48, height: 48, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Map size={20} style={{ color: "var(--text-muted)" }} />
+        </div>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", maxWidth: 300 }}>
+          Todavía no tienes ninguna ruta de aprendizaje asignada. Una ruta agrupa varias formaciones en un orden concreto.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom: "var(--sp-5)" }}>
+        <h2 style={{ fontSize: "var(--text-xl)", fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>Rutas de aprendizaje</h2>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", marginTop: 2 }}>Itinerarios de varias formaciones, en orden</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+        {paths.map((p) => {
+          const pathCourses = p.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+          const doneCount = currentUser ? pathCourses.filter((c) => getStatus(currentUser, c.id) === "completada").length : 0;
+          const percent = pathCourses.length ? Math.round((doneCount / pathCourses.length) * 100) : 0;
+          return (
+            <button
+              key={p.id}
+              onClick={() => onOpenPath(p.id)}
+              style={{ ...DS.card, textAlign: "left", cursor: "pointer", padding: "var(--sp-5)", display: "flex", flexDirection: "column", gap: "var(--sp-3)", transition: "all var(--dur-base) var(--ease-out)" }}
+              onMouseEnter={(e) => Object.assign(e.currentTarget.style, { boxShadow: "var(--shadow-md)", transform: "translateY(-2px)" })}
+              onMouseLeave={(e) => Object.assign(e.currentTarget.style, { boxShadow: "none", transform: "none" })}
+            >
+              <div style={{ width: 40, height: 40, borderRadius: "var(--radius-md)", backgroundColor: "var(--info-soft)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Map size={19} style={{ color: "var(--info)" }} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: "var(--text-md)", color: "var(--text-primary)" }}>{p.title}</div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: 2 }}>{pathCourses.length} formación{pathCourses.length === 1 ? "" : "es"}</div>
+              </div>
+              <div>
+                <div style={{ height: 6, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden", marginBottom: 4 }}>
+                  <div style={{ height: "100%", width: `${percent}%`, backgroundColor: percent === 100 ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)" }} />
+                </div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{doneCount}/{pathCourses.length} completadas · {percent}%</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PathDetailView({ path, courses, currentUser, getStatus, onOpenCourse, onBack }) {
+  if (!path) return null;
+  const pathCourses = path.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+  const statuses = pathCourses.map((c) => (currentUser ? getStatus(currentUser, c.id) : "pendiente"));
+  const doneCount = statuses.filter((s) => s === "completada").length;
+  const percent = pathCourses.length ? Math.round((doneCount / pathCourses.length) * 100) : 0;
+  const firstUnpassedIndex = statuses.findIndex((s) => s !== "completada");
+  const activeIndex = firstUnpassedIndex === -1 ? pathCourses.length - 1 : firstUnpassedIndex;
+  const allDone = firstUnpassedIndex === -1;
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content", marginBottom: "var(--sp-4)" }}>
+        <ChevronLeft size={15} /> Rutas de aprendizaje
+      </button>
+
+      <div style={{ marginBottom: "var(--sp-4)" }}>
+        <h1 style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-1) 0" }}>{path.title}</h1>
+        {path.description && <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0, maxWidth: 600 }}>{path.description}</p>}
+      </div>
+
+      <div style={{ ...DS.card, padding: "var(--sp-4)", marginBottom: "var(--sp-5)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
+            {allDone ? "🎉 Ruta completada" : `${doneCount} de ${pathCourses.length} formaciones completadas`}
+          </span>
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--brand)" }}>{percent}%</span>
+        </div>
+        <div style={{ height: 8, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${percent}%`, backgroundColor: allDone ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)", transition: "width 0.4s var(--ease-out)" }} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+        {pathCourses.map((c, i) => {
+          const status = statuses[i];
+          const passed = status === "completada";
+          const locked = i > activeIndex;
+          return (
+            <button
+              key={c.id}
+              disabled={locked}
+              onClick={() => onOpenCourse(c.id)}
+              style={{
+                ...DS.card, textAlign: "left", cursor: locked ? "not-allowed" : "pointer",
+                padding: "var(--sp-3) var(--sp-4)", display: "flex", alignItems: "center", gap: "var(--sp-3)",
+                opacity: locked ? 0.55 : 1, transition: "all var(--dur-fast) var(--ease-out)",
+              }}
+            >
+              <span style={{
+                width: 28, height: 28, borderRadius: "var(--radius-full)", flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700,
+                backgroundColor: passed ? "var(--success)" : locked ? "var(--bg-inset)" : "var(--brand)",
+                color: passed || !locked ? "white" : "var(--text-muted)",
+              }}>
+                {passed ? <CheckCircle2 size={14} /> : locked ? <Lock size={12} /> : i + 1}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
+                <CategoryTag id={c.category} small />
+              </div>
+              {!locked && !passed && <ChevronRight size={16} style={{ color: "var(--text-muted)", flexShrink: 0 }} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 
 
 function shadeColor(hex, percent) {
@@ -3387,6 +3600,226 @@ function TextInput({ label, value, onChange, placeholder, type = "text" }) {
   );
 }
 
+function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDeletePath }) {
+  const emptyAssignment = { mode: "todos", groupIds: [], employeeNames: [] };
+  const [editingId, setEditingId] = useState(undefined); // undefined = lista, null = nueva, id = editando
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [courseIds, setCourseIds] = useState([]);
+  const [assignment, setAssignment] = useState({ ...emptyAssignment });
+  const [addCourseId, setAddCourseId] = useState("");
+  const [assignSearch, setAssignSearch] = useState("");
+  const [isWelcomePath, setIsWelcomePath] = useState(false);
+
+  function startNew() {
+    setEditingId(null);
+    setTitle("");
+    setDescription("");
+    setCourseIds([]);
+    setAssignment({ ...emptyAssignment });
+    setAddCourseId("");
+    setIsWelcomePath(false);
+  }
+  function startEdit(p) {
+    setEditingId(p.id);
+    setTitle(p.title);
+    setDescription(p.description || "");
+    setCourseIds([...p.courseIds]);
+    setAssignment(p.assignment ? { ...p.assignment } : { ...emptyAssignment });
+    setAddCourseId("");
+    setIsWelcomePath(!!p.isWelcomePath);
+  }
+  function moveCourse(i, dir) {
+    setCourseIds((prev) => {
+      const arr = [...prev];
+      const target = i + dir;
+      if (target < 0 || target >= arr.length) return arr;
+      [arr[i], arr[target]] = [arr[target], arr[i]];
+      return arr;
+    });
+  }
+
+  if (editingId === undefined) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+        <button
+          onClick={startNew}
+          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content" }}
+        >
+          <Plus size={15} /> Nueva ruta
+        </button>
+        {paths.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay rutas de aprendizaje todavía.</div>}
+        {paths.map((p) => (
+          <div key={p.id} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "var(--sp-3)" }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{p.title}</div>
+                {p.isWelcomePath && (
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--success-soft)", color: "var(--success-text)" }}>
+                    Ruta de bienvenida
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{p.courseIds.length} formación{p.courseIds.length === 1 ? "" : "es"}</div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => startEdit(p)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer" }}>Editar</button>
+              <button onClick={() => onDeletePath(p.id)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--danger)", border: "none", background: "none", cursor: "pointer" }}>Eliminar</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const availableCourses = courses.filter((c) => !courseIds.includes(c.id));
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)", maxWidth: 640 }}>
+      <button onClick={() => setEditingId(undefined)} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content" }}>
+        <ChevronLeft size={15} /> Rutas
+      </button>
+
+      <TextInput label="Título de la ruta" value={title} onChange={setTitle} placeholder="Ej. Ruta de bienvenida" />
+      <label className="block text-xs font-semibold text-gray-500 mb-1">
+        Descripción
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900" style={{ borderColor: "#00000020" }} />
+      </label>
+
+      <div>
+        <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)" }}>
+          Formaciones de la ruta, en el orden en que se desbloquean
+        </div>
+        <div className="flex gap-2 mb-3">
+          <select value={addCourseId} onChange={(e) => setAddCourseId(e.target.value)} className="flex-1 text-sm rounded-md border px-3 py-2" style={{ borderColor: "#00000020" }}>
+            <option value="">Selecciona una formación para añadir…</option>
+            {availableCourses.map((c) => (
+              <option key={c.id} value={c.id}>{c.title}</option>
+            ))}
+          </select>
+          <button
+            disabled={!addCourseId}
+            onClick={() => {
+              setCourseIds((prev) => [...prev, addCourseId]);
+              setAddCourseId("");
+            }}
+            style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--brand)", backgroundColor: "var(--bg-card)", border: "1px solid var(--border)", cursor: "pointer", opacity: !addCourseId ? 0.4 : 1 }}
+          >
+            Añadir
+          </button>
+        </div>
+        {courseIds.length === 0 ? (
+          <div className="text-xs text-gray-400">Añade al menos una formación.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {courseIds.map((cid, i) => {
+              const c = courses.find((cc) => cc.id === cid);
+              if (!c) return null;
+              return (
+                <div key={cid} style={{ ...DS.card, display: "flex", alignItems: "center", gap: 8, padding: "var(--sp-2) var(--sp-3)" }}>
+                  <span style={{ width: 20, height: 20, borderRadius: "var(--radius-full)", backgroundColor: "var(--brand)", color: "white", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                  <div style={{ flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{c.title}</div>
+                  <button disabled={i === 0} onClick={() => moveCourse(i, -1)} className="text-gray-400 disabled:opacity-30"><ChevronUp size={15} /></button>
+                  <button disabled={i === courseIds.length - 1} onClick={() => moveCourse(i, 1)} className="text-gray-400 disabled:opacity-30"><ChevronDown size={15} /></button>
+                  <button onClick={() => setCourseIds((prev) => prev.filter((id) => id !== cid))} className="text-red-500"><X size={15} /></button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)" }}>Asignar ruta a</div>
+        <div className="flex gap-2 flex-wrap mb-2">
+          {[
+            { id: "todos", label: "Todos los empleados" },
+            { id: "grupos", label: "Grupos concretos" },
+            { id: "individual", label: "Personas concretas" },
+          ].map((m) => (
+            <button
+              key={m.id}
+              onClick={() => setAssignment((a) => ({ ...a, mode: m.id }))}
+              className="text-xs font-semibold px-3 py-1.5 rounded-full border"
+              style={{
+                backgroundColor: assignment.mode === m.id ? "var(--brand)" : "white",
+                color: assignment.mode === m.id ? "white" : "var(--text-primary)",
+                borderColor: assignment.mode === m.id ? "var(--brand)" : "#00000018",
+              }}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        {assignment.mode === "grupos" && (
+          <div className="rounded-lg border p-3 space-y-1.5" style={{ borderColor: "#00000018" }}>
+            {groups.length === 0 ? (
+              <div className="text-xs text-gray-400">No hay grupos creados todavía.</div>
+            ) : (
+              groups.map((g) => (
+                <label key={g.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={(assignment.groupIds || []).includes(g.id)}
+                    onChange={() => {
+                      const has = (assignment.groupIds || []).includes(g.id);
+                      setAssignment((a) => ({ ...a, groupIds: has ? a.groupIds.filter((id) => id !== g.id) : [...(a.groupIds || []), g.id] }));
+                    }}
+                  />
+                  {g.name} <span className="text-[11px] text-gray-400">({(g.memberNames || []).length} personas)</span>
+                </label>
+              ))
+            )}
+          </div>
+        )}
+        {assignment.mode === "individual" && (
+          <div className="rounded-lg border p-3 space-y-1.5" style={{ borderColor: "#00000018" }}>
+            {employees.length > 8 && (
+              <input value={assignSearch} onChange={(e) => setAssignSearch(e.target.value)} placeholder="Buscar por nombre..." className="w-full text-xs rounded-md border px-2 py-1.5 mb-1.5" style={{ borderColor: "#00000020" }} />
+            )}
+            <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+              {employees
+                .filter((e) => e.name.toLowerCase().includes(assignSearch.trim().toLowerCase()))
+                .map((e) => (
+                  <label key={e.name} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={(assignment.employeeNames || []).includes(e.name)}
+                      onChange={() => {
+                        const has = (assignment.employeeNames || []).includes(e.name);
+                        setAssignment((a) => ({ ...a, employeeNames: has ? a.employeeNames.filter((n) => n !== e.name) : [...(a.employeeNames || []), e.name] }));
+                      }}
+                    />
+                    {e.name}
+                  </label>
+                ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div style={{ ...DS.card, padding: "var(--sp-3)", display: "flex", alignItems: "center", gap: 10 }}>
+        <input type="checkbox" checked={isWelcomePath} onChange={(e) => setIsWelcomePath(e.target.checked)} id="welcome-path-check" />
+        <label htmlFor="welcome-path-check" style={{ fontSize: "var(--text-sm)", cursor: "pointer" }}>
+          <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>Ruta de bienvenida</span>
+          <span style={{ color: "var(--text-muted)" }}> — se asigna sola a cada persona nueva que se dé de alta, además de a quien ya hayas asignado arriba.</span>
+        </label>
+      </div>
+
+      <button
+        disabled={!title.trim() || courseIds.length === 0}
+        onClick={async () => {
+          await onSavePath({ id: editingId || uid(), title: title.trim(), description, courseIds, assignment, isWelcomePath });
+          setEditingId(undefined);
+        }}
+        style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: (!title.trim() || courseIds.length === 0) ? 0.4 : 1, width: "fit-content" }}
+      >
+        Guardar ruta
+      </button>
+    </div>
+  );
+}
+
 function AdminPanel({
   courses,
   news,
@@ -3416,6 +3849,9 @@ function AdminPanel({
   onExportBackup,
   onImportBackup,
   onUpdateEmployeeManagedGroups,
+  paths,
+  onSavePath,
+  onDeletePath,
   mode = "full",
   restrictToGroupIds = [],
 }) {
@@ -3711,6 +4147,7 @@ function AdminPanel({
             : [
                 { id: "courses", label: "Formaciones" },
                 { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
+                { id: "paths", label: "Rutas" },
                 { id: "news", label: "Novedades" },
                 { id: "employees", label: "Empleados" },
                 { id: "groups", label: "Grupos" },
@@ -4138,6 +4575,10 @@ function AdminPanel({
             </button>
           </div>
         </div>
+      )}
+
+      {tab === "paths" && mode !== "team" && (
+        <PathsAdminTab paths={paths} courses={courses} groups={groups} employees={employees} onSavePath={onSavePath} onDeletePath={onDeletePath} />
       )}
 
       {tab === "news" && mode !== "team" && (
