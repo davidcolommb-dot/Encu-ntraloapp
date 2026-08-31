@@ -843,27 +843,71 @@ function ProgressRing({ percent, size = 64, color = BRAND.red, label }) {
   );
 }
 
-function RatingStars({ rating, onRate }) {
+function RatingStars({ rating, ratingComment, awaitingRating, onRate }) {
+  const [selected, setSelected] = useState(rating || 0);
   const [hover, setHover] = useState(0);
+  const [comment, setComment] = useState(ratingComment || "");
+  const [submitted, setSubmitted] = useState(!awaitingRating && !!rating);
+
+  if (submitted) {
+    return (
+      <div style={{ ...DS.card, padding: "var(--sp-4)", display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+        <div style={{ display: "flex", gap: 2 }}>
+          {[1, 2, 3, 4, 5].map((n) => (
+            <Star key={n} size={16} fill={selected >= n ? "var(--warning)" : "none"} color={selected >= n ? "var(--warning)" : "var(--border-strong)"} />
+          ))}
+        </div>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>Gracias por tu valoración.</div>
+        <button onClick={() => setSubmitted(false)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer", marginLeft: "auto" }}>
+          Cambiarla
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ ...DS.card, padding: "var(--sp-4)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-3)", flexWrap: "wrap" }}>
-      <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
-        {rating ? "Gracias por tu valoración" : "¿Te ha resultado útil esta formación?"}
+    <div style={{ ...DS.card, padding: "var(--sp-4)", display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+      <div>
+        <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
+          ¿Qué te ha parecido esta formación?
+        </div>
+        {awaitingRating && (
+          <div style={{ fontSize: "var(--text-xs)", color: "var(--warning-text)", backgroundColor: "var(--warning-soft)", display: "inline-block", padding: "2px 8px", borderRadius: "var(--radius-full)", marginTop: 4, fontWeight: 500 }}>
+            Falta esto para dar la formación por completada
+          </div>
+        )}
       </div>
       <div style={{ display: "flex", gap: 2 }}>
         {[1, 2, 3, 4, 5].map((n) => (
           <button
             key={n}
-            onClick={() => onRate(n)}
+            onClick={() => setSelected(n)}
             onMouseEnter={() => setHover(n)}
             onMouseLeave={() => setHover(0)}
             style={{ border: "none", background: "none", cursor: "pointer", padding: 2, display: "flex" }}
             title={`${n} estrella${n === 1 ? "" : "s"}`}
           >
-            <Star size={22} fill={(hover || rating) >= n ? "var(--warning)" : "none"} color={(hover || rating) >= n ? "var(--warning)" : "var(--border-strong)"} />
+            <Star size={24} fill={(hover || selected) >= n ? "var(--warning)" : "none"} color={(hover || selected) >= n ? "var(--warning)" : "var(--border-strong)"} />
           </button>
         ))}
       </div>
+      <textarea
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        placeholder="Algún comentario, sugerencia o mejora (opcional)"
+        rows={2}
+        style={{ width: "100%", fontSize: "var(--text-sm)", padding: "8px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontFamily: "inherit", resize: "vertical" }}
+      />
+      <button
+        disabled={selected === 0}
+        onClick={() => {
+          onRate(selected, comment);
+          setSubmitted(true);
+        }}
+        style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: selected === 0 ? 0.4 : 1, width: "fit-content" }}
+      >
+        {awaitingRating ? "Enviar y completar formación" : "Guardar valoración"}
+      </button>
     </div>
   );
 }
@@ -1356,10 +1400,10 @@ export default function AulaVirtualMB() {
       // (no sabemos el valor original una vez creado), así que esas personas simplemente
       // crean su contraseña de nuevo la próxima vez, verificando su email.
       const normalizedEmployees = (emp || []).map((e) => {
-        if (typeof e === "string") return { name: e, passwordHash: null, email: "" };
+        if (typeof e === "string") return { name: e, passwordHash: null, email: "", managedGroupIds: [] };
         const { pin, pinProvided, ...rest } = e;
         const validHash = isValidHash(rest.passwordHash) ? rest.passwordHash : null;
-        return { email: "", ...rest, passwordHash: validHash };
+        return { email: "", managedGroupIds: [], ...rest, passwordHash: validHash };
       });
       setCourses(finalCourses);
       setNews(finalNews);
@@ -1460,11 +1504,15 @@ export default function AulaVirtualMB() {
     const updated = {
       ...current,
       [currentUser]: {
-        status: passed ? "completada" : "en_progreso",
+        // Aprobar el test ya no marca "completada" directamente: falta la
+        // valoración obligatoria. awaitingRating es lo que la interfaz usa
+        // para saber que toca pedirla antes de dar la formación por hecha.
+        status: "en_progreso",
         startedAt: prev.startedAt || todayISO(),
-        completedAt: passed ? todayISO() : null,
+        completedAt: null,
         score,
         attempts: (prev.attempts || 0) + 1,
+        awaitingRating: passed,
       },
     };
     setCompletionsByCourse((prevState) => ({ ...prevState, [activeCourse.id]: updated }));
@@ -1473,9 +1521,9 @@ export default function AulaVirtualMB() {
   }
 
   // Formaciones "por módulos": cada módulo tiene su propio mini-test, y hay que
-  // aprobar uno para desbloquear el siguiente. El progreso se guarda por módulo
-  // dentro del mismo registro de la formación; la formación entera se marca
-  // "completada" solo cuando todos los módulos están aprobados.
+  // aprobar uno para desbloquear el siguiente. Al aprobar el último módulo, la
+  // formación queda "a la espera de valoración" — no se da por completada del
+  // todo hasta que la persona puntúa (ver rateCourse).
   async function submitModuleQuiz(courseId, moduleObj) {
     if (!currentUser) return null;
     const quiz = moduleObj.quiz || [];
@@ -1504,9 +1552,10 @@ export default function AulaVirtualMB() {
 
     const updatedRec = {
       ...prevRec,
-      status: allPassed ? "completada" : "en_progreso",
+      status: "en_progreso",
       moduleProgress,
-      completedAt: allPassed ? todayISO() : null,
+      completedAt: null,
+      awaitingRating: allPassed,
     };
     const updated = { ...current, [currentUser]: updatedRec };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
@@ -1524,27 +1573,42 @@ export default function AulaVirtualMB() {
     const updated = {
       ...current,
       [currentUser]: {
-        status: "completada",
+        status: "en_progreso",
         startedAt: prev.startedAt || todayISO(),
-        completedAt: todayISO(),
+        completedAt: null,
         score: null,
         selfReported: true,
         attempts: (prev.attempts || 0) + 1,
+        awaitingRating: true,
       },
     };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
     await saveKey(`mb_completions_course_${courseId}`, updated);
   }
 
-  // Valoración rápida (1-5 estrellas) que la persona puede dejar tras completar
-  // una formación. No obliga a nadie ni bloquea nada — es solo feedback opcional
-  // para que el administrador vea qué formaciones funcionan mejor.
-  async function rateCourse(courseId, rating) {
+  // Valoración (1-5 estrellas + comentario opcional). Ahora es el paso que
+  // realmente cierra una formación: si estaba "a la espera de valoración"
+  // (awaitingRating), al valorar pasa a "completada" de verdad, con fecha de
+  // hoy. Si ya estaba completada de antes (por ejemplo, alguien que cambia su
+  // valoración más adelante), simplemente actualiza la nota sin tocar el resto.
+  async function rateCourse(courseId, rating, comment) {
     if (!currentUser) return;
     const current = await loadKey(`mb_completions_course_${courseId}`, {});
     const prev = current[currentUser];
     if (!prev) return;
-    const updated = { ...current, [currentUser]: { ...prev, rating } };
+    const wasAwaiting = !!prev.awaitingRating;
+    const updated = {
+      ...current,
+      [currentUser]: {
+        ...prev,
+        rating,
+        ratingComment: comment || "",
+        ratedAt: todayISO(),
+        status: wasAwaiting ? "completada" : prev.status,
+        completedAt: wasAwaiting ? todayISO() : prev.completedAt,
+        awaitingRating: false,
+      },
+    };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
     await saveKey(`mb_completions_course_${courseId}`, updated);
   }
@@ -1586,6 +1650,13 @@ export default function AulaVirtualMB() {
   const overdueForUser = useMemo(() => pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) < 0), [pendingForUser]);
   const dueSoonForUser = useMemo(() => pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) >= 0 && daysUntil(c.deadline) <= 3), [pendingForUser]);
   const alertCount = overdueForUser.length + dueSoonForUser.length;
+
+  // Si la persona que ha iniciado sesión es responsable de algún equipo, esto
+  // no está vacío — determina si ve la pestaña "Mi equipo" y con qué alcance.
+  const myManagedGroupIds = useMemo(() => {
+    if (!currentUser) return [];
+    return employees.find((e) => e.name === currentUser)?.managedGroupIds || [];
+  }, [employees, currentUser]);
 
   const assignedCountForUser = useMemo(() => {
     if (!currentUser) return 0;
@@ -1755,6 +1826,16 @@ export default function AulaVirtualMB() {
     const updated = employees.map((e) => (e.name === name ? { ...e, email } : e));
     setEmployees(updated);
     saveKey("mb_employees", updated);
+  }
+
+  // Marca a alguien como "responsable" de uno o varios grupos: al entrar con su
+  // nombre y contraseña de siempre, verá además la pestaña "Mi equipo" con
+  // acceso reducido (su gente y su seguimiento, no toda la empresa) — pero
+  // puede crear formaciones para cualquier equipo, no solo el suyo.
+  async function updateEmployeeManagedGroups(name, groupIds) {
+    const updated = employees.map((e) => (e.name === name ? { ...e, managedGroupIds: groupIds } : e));
+    setEmployees(updated);
+    await saveKey("mb_employees", updated);
   }
 
   // Renombrar a alguien es delicado: su nombre se usa como identificador en
@@ -1988,6 +2069,7 @@ export default function AulaVirtualMB() {
                 { id: "dashboard", label: "Inicio", icon: Home },
                 ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
                 { id: "catalog", label: "Catálogo", icon: LayoutGrid },
+                ...(myManagedGroupIds.length > 0 ? [{ id: "team", label: "Mi equipo", icon: Users }] : []),
                 ...(isAdmin ? [{ id: "admin", label: "Admin", icon: Settings }] : []),
               ].map((t) => {
                 const active = view === t.id || (view === "course" && t.id === "catalog");
@@ -2142,7 +2224,7 @@ export default function AulaVirtualMB() {
               setQuizResult(null);
             }}
             onSelfReport={() => selfReportComplete(activeCourse.id)}
-            onRateCourse={(rating) => rateCourse(activeCourse.id, rating)}
+            onRateCourse={(rating, comment) => rateCourse(activeCourse.id, rating, comment)}
             onBack={() => setView("catalog")}
             onRetry={() => {
               setQuizAnswers({});
@@ -2171,13 +2253,47 @@ export default function AulaVirtualMB() {
             onRemoveEmployee={removeEmployee}
             onResetEmployeePassword={resetEmployeePassword}
             onUpdateEmployeeEmail={updateEmployeeEmail}
+            onUpdateEmployeeManagedGroups={updateEmployeeManagedGroups}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
             onDeleteGroup={deleteGroup}
             onUpdateGroupMembers={updateGroupMembers}
             onManualSetStatus={manualSetStatus}
-            onLoadSeedExamples={loadSeedExamples}
+            onExportBackup={exportBackup}
+            onImportBackup={importBackup}
+          />
+        )}
+        {view === "team" && myManagedGroupIds.length > 0 && (
+          <AdminPanel
+            mode="team"
+            restrictToGroupIds={myManagedGroupIds}
+            courses={courses}
+            news={news}
+            employees={employees}
+            groups={groups}
+            completionsByCourse={completionsByCourse}
+            loadingTracking={loadingTracking}
+            lastBackupAt={lastBackupAt}
+            sheetsUrl={sheetsUrl}
+            onSaveSheetsUrl={saveSheetsUrl}
+            onLoadTracking={loadAllCompletionsForTracking}
+            onSaveCourse={saveCourse}
+            onDeleteCourse={deleteCourse}
+            onAddNews={addNews}
+            onUpdateNews={updateNews}
+            onDeleteNews={deleteNews}
+            onAddEmployee={addEmployee}
+            onRemoveEmployee={removeEmployee}
+            onResetEmployeePassword={resetEmployeePassword}
+            onUpdateEmployeeEmail={updateEmployeeEmail}
+            onUpdateEmployeeManagedGroups={updateEmployeeManagedGroups}
+            onRenameEmployee={renameEmployee}
+            onImportEmployeesBulk={importEmployeesBulk}
+            onAddGroup={addGroup}
+            onDeleteGroup={deleteGroup}
+            onUpdateGroupMembers={updateGroupMembers}
+            onManualSetStatus={manualSetStatus}
             onExportBackup={exportBackup}
             onImportBackup={importBackup}
           />
@@ -2908,6 +3024,8 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
           <div>
             {status === "completada" ? (
               <StatusPill icon={CheckCircle2} label={`Completado ${record?.completedAt ? `el ${record.completedAt}` : ""}`} variant="success" />
+            ) : record?.awaitingRating ? (
+              <StatusPill icon={Star} label="Formulario recibido — valóralo abajo para terminar" variant="warning" />
             ) : (
               <button
                 disabled={!currentUser}
@@ -2945,7 +3063,7 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
               }}>
                 {quizResult.passed ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
                 {quizResult.passed
-                  ? `Superado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%)`
+                  ? `Superado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%). Valórala abajo para completar la formación.`
                   : `No alcanzado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%). Necesitas ${course.passPct ?? 70}%.`}
               </div>
               {!quizResult.passed && (
@@ -2995,8 +3113,8 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
         </div>
       )}
 
-      {status === "completada" && currentUser && (
-        <RatingStars rating={record?.rating || 0} onRate={onRateCourse} />
+      {(status === "completada" || record?.awaitingRating) && currentUser && (
+        <RatingStars rating={record?.rating || 0} ratingComment={record?.ratingComment} awaitingRating={!!record?.awaitingRating} onRate={onRateCourse} />
       )}
     </div>
   );
@@ -3120,7 +3238,7 @@ function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers
               )}
               {quizResult.passed && isLastModule && (
                 <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--success-text)" }}>
-                  🎉 ¡Formación completada entera! Ya puedes volver al catálogo cuando quieras.
+                  🎉 ¡Último módulo superado! Solo falta valorar la formación, abajo del todo, para darla por completada.
                 </div>
               )}
             </div>
@@ -3243,7 +3361,9 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
               />
             )}
           </div>
-          {allDone && currentUser && <RatingStars rating={record?.rating || 0} onRate={onRateCourse} />}
+          {allDone && currentUser && (
+            <RatingStars rating={record?.rating || 0} ratingComment={record?.ratingComment} awaitingRating={!!record?.awaitingRating} onRate={onRateCourse} />
+          )}
         </div>
       </div>
     </div>
@@ -3293,9 +3413,11 @@ function AdminPanel({
   onDeleteGroup,
   onUpdateGroupMembers,
   onManualSetStatus,
-  onLoadSeedExamples,
   onExportBackup,
   onImportBackup,
+  onUpdateEmployeeManagedGroups,
+  mode = "full",
+  restrictToGroupIds = [],
 }) {
   const [tab, setTab] = useState("courses");
   const emptyQuestion = { question: "", options: ["", "", "", ""], correct: 0 };
@@ -3324,6 +3446,7 @@ function AdminPanel({
   const [editingNameValue, setEditingNameValue] = useState("");
   const [renameError, setRenameError] = useState("");
   const [editingEmailValue, setEditingEmailValue] = useState("");
+  const [editingManagedGroupsFor, setEditingManagedGroupsFor] = useState(null);
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [importPreviewRows, setImportPreviewRows] = useState(null);
   const [importFileError, setImportFileError] = useState("");
@@ -3344,8 +3467,6 @@ function AdminPanel({
   const [syncStatus, setSyncStatus] = useState("");
   const [manualCourseId, setManualCourseId] = useState("");
   const [manualEmployeeName, setManualEmployeeName] = useState("");
-  const [loadingExamples, setLoadingExamples] = useState(false);
-  const [examplesMsg, setExamplesMsg] = useState("");
 
   function resetDraft() {
     setDraft({
@@ -3550,21 +3671,55 @@ function AdminPanel({
     return rows;
   }, [employees, courses, groups, completionsByCourse]);
 
+  // Modo "equipo" (responsables): solo la gente de los grupos que gestionan.
+  const teamMemberNames = useMemo(() => {
+    if (mode !== "team") return null;
+    const names = new Set();
+    for (const g of groups) {
+      if (restrictToGroupIds.includes(g.id)) {
+        for (const n of g.memberNames || []) names.add(n);
+      }
+    }
+    return names;
+  }, [mode, groups, restrictToGroupIds]);
+
+  const teamEmployees = useMemo(() => {
+    if (!teamMemberNames) return [];
+    return employees.filter((e) => teamMemberNames.has(e.name));
+  }, [employees, teamMemberNames]);
+
+  const teamCompletionRows = useMemo(() => {
+    if (!teamMemberNames) return [];
+    return completionRows.filter((r) => teamMemberNames.has(r.employee));
+  }, [completionRows, teamMemberNames]);
+
+  const [teamNewMemberName, setTeamNewMemberName] = useState("");
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
       <div>
-        <h1 style={{ fontSize: "var(--text-xl)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-4) 0" }}>Administración</h1>
+        <h1 style={{ fontSize: "var(--text-xl)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-4) 0" }}>
+          {mode === "team" ? "Mi equipo" : "Administración"}
+        </h1>
         <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
-          {[
-            { id: "courses", label: "Formaciones" },
-            { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
-            { id: "news", label: "Novedades" },
-            { id: "employees", label: "Empleados" },
-            { id: "groups", label: "Grupos" },
-            { id: "seguimiento", label: "Seguimiento" },
-            { id: "notificaciones", label: "Notificaciones" },
-            { id: "backup", label: "Copia de seguridad" },
-          ].map((t) => {
+          {(mode === "team"
+            ? [
+                { id: "courses", label: "Formaciones" },
+                { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
+                { id: "team", label: "Mi equipo" },
+              ]
+            : [
+                { id: "courses", label: "Formaciones" },
+                { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
+                { id: "news", label: "Novedades" },
+                { id: "employees", label: "Empleados" },
+                { id: "groups", label: "Grupos" },
+                { id: "seguimiento", label: "Seguimiento" },
+                { id: "reviews", label: "Reseñas" },
+                { id: "notificaciones", label: "Notificaciones" },
+                { id: "backup", label: "Copia de seguridad" },
+              ]
+          ).map((t) => {
             const active = tab === t.id;
             return (
               <button
@@ -3601,21 +3756,6 @@ function AdminPanel({
             >
               <Plus size={15} /> Nueva formación
             </button>
-            <button
-              disabled={loadingExamples}
-              onClick={async () => {
-                setLoadingExamples(true);
-                const added = await onLoadSeedExamples();
-                setLoadingExamples(false);
-                setExamplesMsg(`Ejemplos actualizados (${added} formaciones/novedades). Si tenías progreso guardado en las versiones antiguas, se ha reiniciado.`);
-                setTimeout(() => setExamplesMsg(""), 6000);
-              }}
-              style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 500, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--brand)", backgroundColor: "var(--bg-card)", border: "1px solid var(--border)", cursor: "pointer", opacity: loadingExamples ? 0.5 : 1 }}
-            >
-              {loadingExamples && <Loader2 size={14} className="animate-spin" />}
-              Cargar / actualizar ejemplos
-            </button>
-            {examplesMsg && <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{examplesMsg}</span>}
           </div>
           {courses.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay formaciones todavía.</div>}
           {courses.map((c) => (
@@ -4000,7 +4140,7 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "news" && (
+      {tab === "news" && mode !== "team" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 space-y-3 shadow-sm" style={{ borderColor: "#00000012" }}>
             {editingNewsId && (
@@ -4144,7 +4284,7 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "employees" && (
+      {tab === "employees" && mode !== "team" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 flex items-end gap-2 flex-wrap shadow-sm" style={{ borderColor: "#00000012" }}>
             <div className="flex-1 min-w-[160px]">
@@ -4385,8 +4525,22 @@ function AdminPanel({
                       )}
                     </div>
                     {!e.passwordHash && <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5 flex-shrink-0">Sin contraseña todavía</span>}
+                    {mode !== "team" && (e.managedGroupIds || []).length > 0 && (
+                      <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 flex-shrink-0" style={{ backgroundColor: "var(--brand-soft)", color: "var(--brand)" }}>
+                        Responsable de {e.managedGroupIds.length} equipo{e.managedGroupIds.length === 1 ? "" : "s"}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
+                    {mode !== "team" && (
+                      <button
+                        onClick={() => setEditingManagedGroupsFor(editingManagedGroupsFor === e.name ? null : e.name)}
+                        className="text-xs font-semibold"
+                        style={{ color: BRAND.blue }}
+                      >
+                        Responsable de…
+                      </button>
+                    )}
                     {e.passwordHash && (
                       <button
                         onClick={() => onResetEmployeePassword(e.name)}
@@ -4401,13 +4555,40 @@ function AdminPanel({
                       <Trash2 size={14} />
                     </button>
                   </div>
+                  {editingManagedGroupsFor === e.name && (
+                    <div style={{ ...DS.card, padding: "var(--sp-3)", width: "100%", marginTop: "var(--sp-2)" }}>
+                      <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-2)" }}>
+                        Hacer a {e.name} responsable de estos equipos (verá "Mi equipo" al entrar, y podrá subir formaciones para cualquier equipo):
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {groups.length === 0 && <div className="text-xs text-gray-400">Crea grupos primero, en la pestaña Grupos.</div>}
+                        {groups.map((g) => {
+                          const checked = (e.managedGroupIds || []).includes(g.id);
+                          return (
+                            <label key={g.id} className="flex items-center gap-1.5 text-xs" style={{ cursor: "pointer" }}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  const current = e.managedGroupIds || [];
+                                  const next = checked ? current.filter((id) => id !== g.id) : [...current, g.id];
+                                  onUpdateEmployeeManagedGroups(e.name, next);
+                                }}
+                              />
+                              {g.name}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
           </div>
         </div>
       )}
 
-      {tab === "groups" && (
+      {tab === "groups" && mode !== "team" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 flex items-end gap-2 flex-wrap shadow-sm" style={{ borderColor: "#00000012" }}>
             <div className="flex-1 min-w-[200px]">
@@ -4482,7 +4663,7 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "seguimiento" && (
+      {tab === "seguimiento" && mode !== "team" && (
         <div className="space-y-3">
           <button
             onClick={onLoadTracking}
@@ -4586,7 +4767,167 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "notificaciones" && (
+      {tab === "team" && mode === "team" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
+          <div>
+            <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-2)" }}>
+              Miembros de tu equipo ({teamEmployees.length})
+            </div>
+            <div style={{ display: "flex", gap: "var(--sp-2)", marginBottom: "var(--sp-3)", flexWrap: "wrap" }}>
+              <input
+                value={teamNewMemberName}
+                onChange={(e) => setTeamNewMemberName(e.target.value)}
+                placeholder="Nombre de la persona a añadir a tu equipo"
+                className="text-sm rounded-md border px-3 py-2"
+                style={{ borderColor: "#00000020", minWidth: 260 }}
+              />
+              <button
+                disabled={!teamNewMemberName.trim()}
+                onClick={() => {
+                  const name = teamNewMemberName.trim();
+                  const exists = employees.some((e) => e.name.trim().toLowerCase() === name.toLowerCase());
+                  if (!exists) {
+                    onAddEmployee(name, "");
+                  }
+                  for (const gid of restrictToGroupIds) {
+                    const g = groups.find((gr) => gr.id === gid);
+                    if (g && !g.memberNames.includes(name)) {
+                      onUpdateGroupMembers(gid, [...g.memberNames, name]);
+                    }
+                  }
+                  setTeamNewMemberName("");
+                }}
+                style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !teamNewMemberName.trim() ? 0.4 : 1 }}
+              >
+                Añadir a mi equipo
+              </button>
+            </div>
+            <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: "var(--sp-3)" }}>
+              Si la persona ya existe en la aplicación, se añade a tu equipo. Si es nueva, se crea sin contraseña — la creará ella misma en su primer acceso.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+              {teamEmployees.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Todavía no tienes a nadie en tu equipo.</div>}
+              {teamEmployees.map((e) => (
+                <div key={e.name} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "var(--sp-2) var(--sp-3)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Avatar name={e.name} size={26} />
+                    <div>
+                      <div style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{e.name}</div>
+                      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{e.email || "Sin email"}</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      for (const gid of restrictToGroupIds) {
+                        const g = groups.find((gr) => gr.id === gid);
+                        if (g) onUpdateGroupMembers(gid, g.memberNames.filter((n) => n !== e.name));
+                      }
+                    }}
+                    style={{ fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--danger)", border: "none", background: "none", cursor: "pointer" }}
+                  >
+                    Quitar de mi equipo
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-3)" }}>
+              Cumplimiento de tu equipo
+            </div>
+            {teamCompletionRows.length === 0 ? (
+              <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Todavía no hay progreso registrado en tu equipo.</div>
+            ) : (
+              <div style={{ ...DS.card, overflow: "auto" }}>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border)" }}>
+                      <th className="px-3 py-2">Persona</th>
+                      <th className="px-3 py-2">Formación</th>
+                      <th className="px-3 py-2">Estado</th>
+                      <th className="px-3 py-2">Nota</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {teamCompletionRows.map((r, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                        <td className="px-3 py-2">{r.employee}</td>
+                        <td className="px-3 py-2">{r.courseTitle}</td>
+                        <td className="px-3 py-2">
+                          {r.status === "completada" ? (
+                            <span style={{ color: "var(--success)", fontWeight: 600 }}>Completada</span>
+                          ) : (
+                            <span style={{ color: "var(--warning)", fontWeight: 600 }}>En progreso</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">{r.score != null ? `${r.score}%` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === "reviews" && mode !== "team" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
+          <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+            Valoraciones y comentarios que ha dejado cada persona al completar una formación.
+          </div>
+          {courses.filter((c) => avgRatingByCourse[c.id]).length === 0 ? (
+            <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Todavía no hay ninguna valoración registrada.</div>
+          ) : (
+            courses
+              .filter((c) => avgRatingByCourse[c.id])
+              .map((c) => {
+                const entries = Object.entries(completionsByCourse[c.id] || {}).filter(([, r]) => typeof r.rating === "number" && r.rating > 0);
+                return (
+                  <div key={c.id} style={{ ...DS.card, padding: "var(--sp-4)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: "var(--sp-3)", flexWrap: "wrap" }}>
+                      <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{c.title}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--warning)" }}>
+                        <Star size={14} fill="var(--warning)" /> {avgRatingByCourse[c.id].avg.toFixed(1)}
+                        <span style={{ fontSize: "var(--text-xs)", fontWeight: 400, color: "var(--text-muted)" }}>
+                          ({avgRatingByCourse[c.id].count} valoración{avgRatingByCourse[c.id].count === 1 ? "" : "es"})
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+                      {entries.map(([name, r]) => (
+                        <div key={name} style={{ borderTop: "1px solid var(--border)", paddingTop: "var(--sp-2)" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <Avatar name={name} size={22} />
+                              <span style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{name}</span>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ display: "flex", gap: 1 }}>
+                                {[1, 2, 3, 4, 5].map((n) => (
+                                  <Star key={n} size={12} fill={r.rating >= n ? "var(--warning)" : "none"} color={r.rating >= n ? "var(--warning)" : "var(--border-strong)"} />
+                                ))}
+                              </div>
+                              <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{r.ratedAt || ""}</span>
+                            </div>
+                          </div>
+                          {r.ratingComment && (
+                            <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginTop: 4, marginLeft: 30, fontStyle: "italic" }}>
+                              "{r.ratingComment}"
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })
+          )}
+        </div>
+      )}
+
+      {tab === "notificaciones" && mode !== "team" && (
         <div className="space-y-4">
           <button
             onClick={onLoadTracking}
@@ -4700,7 +5041,7 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "backup" && (
+      {tab === "backup" && mode !== "team" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
             <div className="font-bold text-sm mb-1">Estado de la copia de seguridad</div>
