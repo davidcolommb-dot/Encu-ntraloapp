@@ -135,6 +135,30 @@ body {
   .mb-admin-label { display: none; }
 }
 
+/* ── Formaciones por módulos: panel lateral + contenido ── */
+/* En escritorio, el panel de módulos va fijo al lado (220px) mientras se hace
+   scroll del contenido. En pantallas estrechas eso deja el contenido sin
+   espacio real (menos de 150px) — así que en móvil pasa a apilarse: el panel
+   de módulos arriba, a ancho completo, y deja de quedarse fijo al hacer scroll. */
+.mb-module-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: var(--sp-5);
+  align-items: flex-start;
+}
+.mb-module-stepper-wrap {
+  position: sticky;
+  top: 72px;
+}
+@media (max-width: 640px) {
+  .mb-module-layout {
+    grid-template-columns: 1fr;
+  }
+  .mb-module-stepper-wrap {
+    position: static;
+  }
+}
+
 /* Utility: line clamp */
 .line-clamp-1 { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
 .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
