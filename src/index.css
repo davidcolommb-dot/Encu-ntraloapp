@@ -122,17 +122,43 @@ body {
 }
 
 /* ── Responsive header ── */
-.mb-header-inner {
-  display: flex; align-items: center; justify-content: space-between; height: 56px; gap: 12px;
+.mb-header-container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 8px;
 }
-@media (max-width: 640px) {
-  .mb-header-inner { gap: 6px; }
-  .mb-app-name { display: none; }
-  .mb-nav-label { display: none; }
-  .mb-nav-btn { padding: 8px !important; }
-  .mb-view-as-select { display: none; }
-  .mb-user-name { display: none; }
-  .mb-admin-label { display: none; }
+.mb-header-inner {
+  display: flex; align-items: center; justify-content: space-between; height: 52px; gap: 4px;
+}
+.mb-logo { height: 22px; width: auto; }
+.mb-nav { gap: 0; margin-right: 4px; }
+.mb-nav-label { display: none; }
+.mb-nav-btn { padding: 6px 6px !important; }
+.mb-view-as-select { display: none; }
+.mb-user-area { gap: 4px; }
+.mb-user-pill { gap: 2px; padding: 2px 4px 2px 2px !important; }
+.mb-user-name { display: none; }
+.mb-role-pill { gap: 4px; padding: 4px 5px !important; }
+.mb-admin-label { display: none; }
+
+/* Por defecto (hasta escritorios de verdad anchos) solo iconos, sin texto —
+   así la fila de navegación nunca necesita desplazarse, ni con varias
+   píldoras de rol a la derecha a la vez. El texto completo y los espaciados
+   más cómodos solo aparecen en pantallas amplias, como un extra, no como
+   algo necesario para que quepa todo. */
+@media (min-width: 1024px) {
+  .mb-header-container { padding: 0 16px; }
+  .mb-header-inner { height: 56px; gap: 12px; }
+  .mb-logo { height: 26px; }
+  .mb-nav { gap: 2px; margin-right: 8px; }
+  .mb-nav-label { display: inline; }
+  .mb-nav-btn { padding: 6px 14px !important; }
+  .mb-view-as-select { display: inline-block; }
+  .mb-user-area { gap: 6px; }
+  .mb-user-pill { gap: 6px; padding: 4px 10px 4px 4px !important; }
+  .mb-user-name { display: inline; }
+  .mb-role-pill { gap: 5px; padding: 4px 8px !important; }
+  .mb-admin-label { display: inline; }
 }
 
 /* ── Formaciones por módulos: panel lateral + contenido ── */

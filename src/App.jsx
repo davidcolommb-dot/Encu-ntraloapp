@@ -2236,18 +2236,15 @@ export default function AulaVirtualMB() {
     <div style={{ minHeight: "100vh", backgroundColor: "var(--bg-page)", fontFamily: "var(--font-sans)", color: "var(--text-primary)" }}>
       {/* ── HEADER ── */}
       <header style={{ position: "sticky", top: 0, zIndex: 20, backgroundColor: "var(--bg-card)", borderBottom: "1px solid var(--border)" }}>
-        <div style={{ maxWidth: 960, margin: "0 auto", padding: "0 var(--sp-4)" }}>
+        <div className="mb-header-container">
           <div className="mb-header-inner">
             {/* Logo + nombre */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-              <img src="/logo-mb.png" alt="Muñoz Bosch" style={{ height: 26, width: "auto" }} />
-              <span className="mb-app-name" style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-muted)", letterSpacing: "-0.01em" }}>
-                Aula Virtual
-              </span>
+              <img src="/logo-mb.png" alt="Muñoz Bosch" className="mb-logo" />
             </div>
 
             {/* Nav tabs */}
-            <nav style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto", marginRight: 8, flexShrink: 1, overflowX: "auto" }}>
+            <nav className="mb-nav" style={{ display: "flex", alignItems: "center", marginLeft: "auto", flexShrink: 1, overflowX: "auto" }}>
               {[
                 { id: "dashboard", label: "Inicio", icon: Home },
                 ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
@@ -2294,9 +2291,9 @@ export default function AulaVirtualMB() {
             </nav>
 
             {/* User area */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <div className="mb-user-area" style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
               {currentUser && (
-                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px 4px 4px", borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)" }}>
+                <div className="mb-user-pill" style={{ display: "flex", alignItems: "center", borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)" }}>
                   <Avatar name={currentUser} size={24} />
                   <span className="mb-user-name" style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{currentUser.split(" ")[0]}</span>
                   <button onClick={logout} title="Cerrar sesión" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex", padding: 2 }}>
@@ -2307,8 +2304,9 @@ export default function AulaVirtualMB() {
               {myManagedGroupIds.length > 0 && (
                 <button
                   onClick={() => setView("team")}
+                  className="mb-role-pill"
                   style={{
-                    display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: "var(--radius-full)",
+                    display: "flex", alignItems: "center", borderRadius: "var(--radius-full)",
                     backgroundColor: "var(--info-soft)", border: view === "team" ? "1.5px solid var(--info)" : "1.5px solid transparent", cursor: "pointer",
                   }}
                   title="Mi equipo"
@@ -2318,8 +2316,8 @@ export default function AulaVirtualMB() {
                 </button>
               )}
               {isAdmin && (
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: "var(--radius-full)",
+                <div className="mb-role-pill" style={{
+                  display: "flex", alignItems: "center", borderRadius: "var(--radius-full)",
                   backgroundColor: "var(--brand-soft)", border: view === "admin" ? "1.5px solid var(--brand)" : "1.5px solid transparent",
                 }}>
                   <button
@@ -2694,7 +2692,7 @@ function WelcomeBar({ currentUser, pendingForUser, completedForUser, assignedCou
   const allDone = assignedCountForUser > 0 && pendingForUser.length === 0;
   const noneAssigned = assignedCountForUser === 0;
 
-  let statusVariant = "warning", statusIcon = Clock, statusLabel = `${pendingForUser.length} formación${pendingForUser.length === 1 ? "" : "es"} pendiente${pendingForUser.length === 1 ? "" : "s"}`;
+  let statusVariant = "warning", statusIcon = Clock, statusLabel = `${pendingForUser.length} formaci${pendingForUser.length === 1 ? "ón" : "ones"} pendiente${pendingForUser.length === 1 ? "" : "s"}`;
   if (noneAssigned) { statusVariant = "neutral"; statusIcon = Home; statusLabel = "Sin formaciones asignadas"; }
   else if (allDone) { statusVariant = "success"; statusIcon = CheckCircle2; statusLabel = "Estás al día"; }
   else if (overdueCount > 0) { statusVariant = "danger"; statusIcon = AlertTriangle; statusLabel = `${overdueCount} vencida${overdueCount === 1 ? "" : "s"}`; }
@@ -2988,7 +2986,7 @@ function Dashboard({ currentUser, news, pendingForUser, completedForUser, assign
           onClick={onGoToCatalog}
           style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer", textAlign: "left", padding: 0, display: "flex", alignItems: "center", gap: 4, width: "fit-content" }}
         >
-          Y {remainingPendingCount} formación{remainingPendingCount === 1 ? "" : "es"} más pendiente{remainingPendingCount === 1 ? "" : "s"} <ChevronRight size={14} />
+          Y {remainingPendingCount} {remainingPendingCount === 1 ? "formación" : "formaciones"} más pendiente{remainingPendingCount === 1 ? "" : "s"} <ChevronRight size={14} />
         </button>
       )}
 
@@ -3031,7 +3029,7 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
             </div>
             <div>
               <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--danger-text)" }}>Vencidas</div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{overdueForUser.length} formación{overdueForUser.length === 1 ? "" : "es"} con el plazo pasado</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{overdueForUser.length} {overdueForUser.length === 1 ? "formación" : "formaciones"} con el plazo pasado</div>
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
@@ -3048,7 +3046,7 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
             </div>
             <div>
               <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--warning-text)" }}>Próximas a vencer</div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{dueSoonForUser.length} formación{dueSoonForUser.length === 1 ? "" : "es"} con 3 días o menos</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{dueSoonForUser.length} {dueSoonForUser.length === 1 ? "formación" : "formaciones"} con 3 días o menos</div>
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
@@ -3100,7 +3098,7 @@ function RoutesListView({ paths, courses, currentUser, getStatus, onOpenPath }) 
               </div>
               <div>
                 <div style={{ fontWeight: 600, fontSize: "var(--text-md)", color: "var(--text-primary)" }}>{p.title}</div>
-                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: 2 }}>{pathCourses.length} formación{pathCourses.length === 1 ? "" : "es"}</div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: 2 }}>{pathCourses.length} {pathCourses.length === 1 ? "formación" : "formaciones"}</div>
               </div>
               <div>
                 <div style={{ height: 6, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden", marginBottom: 4 }}>
@@ -3923,7 +3921,7 @@ function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDelete
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{p.courseIds.length} formación{p.courseIds.length === 1 ? "" : "es"}</div>
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{p.courseIds.length} {p.courseIds.length === 1 ? "formación" : "formaciones"}</div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={() => startEdit(p)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer" }}>Editar</button>
