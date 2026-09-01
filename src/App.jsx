@@ -2253,8 +2253,6 @@ export default function AulaVirtualMB() {
                 ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
                 { id: "catalog", label: "Catálogo", icon: LayoutGrid },
                 ...(currentUser ? [{ id: "routes", label: "Rutas", icon: Map, count: pendingPathsForUser.length }] : []),
-                ...(myManagedGroupIds.length > 0 ? [{ id: "team", label: "Mi equipo", icon: Users }] : []),
-                ...(isAdmin ? [{ id: "admin", label: "Admin", icon: Settings }] : []),
               ].map((t) => {
                 const active = view === t.id || (view === "course" && t.id === "catalog" && courseOrigin !== "path") || (view === "path-detail" && t.id === "routes") || (view === "course" && t.id === "routes" && courseOrigin === "path");
                 return (
@@ -2306,10 +2304,32 @@ export default function AulaVirtualMB() {
                   </button>
                 </div>
               )}
+              {myManagedGroupIds.length > 0 && (
+                <button
+                  onClick={() => setView("team")}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: "var(--radius-full)",
+                    backgroundColor: "var(--info-soft)", border: view === "team" ? "1.5px solid var(--info)" : "1.5px solid transparent", cursor: "pointer",
+                  }}
+                  title="Mi equipo"
+                >
+                  <Users size={13} style={{ color: "var(--info)" }} />
+                  <span className="mb-admin-label" style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)" }}>Mi equipo</span>
+                </button>
+              )}
               {isAdmin && (
-                <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--brand-soft)" }}>
-                  <ShieldCheck size={13} style={{ color: "var(--brand)" }} />
-                  <span className="mb-admin-label" style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)" }}>Admin</span>
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: "var(--radius-full)",
+                  backgroundColor: "var(--brand-soft)", border: view === "admin" ? "1.5px solid var(--brand)" : "1.5px solid transparent",
+                }}>
+                  <button
+                    onClick={() => setView("admin")}
+                    style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: "none", cursor: "pointer", padding: 0 }}
+                    title="Ir a Administración"
+                  >
+                    <ShieldCheck size={13} style={{ color: "var(--brand)" }} />
+                    <span className="mb-admin-label" style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)" }}>Admin</span>
+                  </button>
                   <button onClick={logoutAdmin} title="Salir" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--brand)", display: "flex", padding: 2, opacity: 0.7 }}>
                     <LogOut size={12} />
                   </button>
