@@ -2126,6 +2126,13 @@ export default function AulaVirtualMB() {
         if (att.storageKey) await deleteKey(att.storageKey);
       }
     }
+    if (course?.modules) {
+      for (const mod of course.modules) {
+        for (const att of mod.attachments || []) {
+          if (att.storageKey) await deleteKey(att.storageKey);
+        }
+      }
+    }
     await deleteKey(`mb_completions_course_${id}`);
     const updated = courses.filter((c) => c.id !== id);
     setCourses(updated);
@@ -3416,6 +3423,7 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
   const quiz = course.quiz || [];
   const allAnswered = quiz.every((_, i) => quizAnswers[i] !== undefined);
   const isGoogleForm = course.testMode === "googleform" && course.googleFormUrl;
+  const isNoTest = course.testMode === "ninguno";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)", maxWidth: 760 }}>
@@ -3513,7 +3521,31 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
         </div>
       )}
 
-      {!isGoogleForm && quiz.length > 0 && (
+      {isNoTest && (
+        <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
+          <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: "var(--sp-3)", display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
+            <CheckCircle2 size={16} style={{ color: "var(--brand)" }} />
+            Esta formación no tiene test
+          </div>
+          <div>
+            {status === "completada" ? (
+              <StatusPill icon={CheckCircle2} label={`Completado ${record?.completedAt ? `el ${record.completedAt}` : ""}`} variant="success" />
+            ) : record?.awaitingRating ? (
+              <StatusPill icon={Star} label="Visto — valóralo abajo para terminar" variant="warning" />
+            ) : (
+              <button
+                disabled={!currentUser}
+                onClick={onSelfReport}
+                style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !currentUser ? 0.4 : 1 }}
+              >
+                Ya la he visto
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!isGoogleForm && !isNoTest && quiz.length > 0 && (
         <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
           <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: "var(--sp-3)", display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
             <ClipboardList size={16} style={{ color: "var(--brand)" }} />
@@ -3674,9 +3706,44 @@ function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers
         </div>
       )}
 
+      {(mod.attachments || []).length > 0 && (
+        <div>
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <FileText size={13} /> DOCUMENTOS DE ESTE MÓDULO
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+            {mod.attachments.map((att) => (
+              <AttachmentViewer key={att.id} att={att} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {showReadOnlyPassed && (
         <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", backgroundColor: "var(--bg-inset)", padding: "var(--sp-3)", borderRadius: "var(--radius-md)" }}>
           Ya superaste este módulo — lo estás revisando. No hace falta repetir el test.
+        </div>
+      )}
+
+      {/* Módulo sin preguntas: no hay nada que responder, solo un botón para
+          seguir adelante — sin este botón, un módulo sin test se quedaría
+          bloqueado para siempre, porque nunca se dispararía el desbloqueo. */}
+      {!alreadyPassed && !showResultBanner && quiz.length === 0 && (
+        <button
+          onClick={onSubmit}
+          style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content" }}
+        >
+          Continuar
+        </button>
+      )}
+      {showResultBanner && quiz.length === 0 && quizResult.passed && !isLastModule && (
+        <button onClick={onContinue} style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content", display: "flex", alignItems: "center", gap: 6 }}>
+          Ir al siguiente módulo <ChevronRight size={15} />
+        </button>
+      )}
+      {showResultBanner && quiz.length === 0 && quizResult.passed && isLastModule && (
+        <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--success-text)" }}>
+          🎉 ¡Último módulo visto! Solo falta valorar la formación, abajo del todo, para darla por completada.
         </div>
       )}
 
@@ -4195,7 +4262,7 @@ function AdminPanel({
       quiz: (course.quiz && course.quiz.length ? course.quiz : [{ ...emptyQuestion }]).map((q) => ({ ...q, options: [...q.options] })),
       attachments: course.attachments ? [...course.attachments] : [],
       assignment: course.assignment ? { ...course.assignment } : { ...emptyAssignment },
-      modules: course.modules ? course.modules.map((m) => ({ ...m, quiz: (m.quiz || []).map((q) => ({ ...q, options: [...q.options] })) })) : [],
+      modules: course.modules ? course.modules.map((m) => ({ ...m, quiz: (m.quiz || []).map((q) => ({ ...q, options: [...q.options] })), attachments: m.attachments ? [...m.attachments] : [] })) : [],
     });
     setFileError("");
     setTab("editor");
@@ -4261,11 +4328,11 @@ function AdminPanel({
   function toggleModularMode() {
     setDraft((d) => {
       const turningOn = !(d.modules && d.modules.length > 0);
-      return { ...d, modules: turningOn ? [{ id: uid(), title: "Módulo 1", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }] }] : [] };
+      return { ...d, modules: turningOn ? [{ id: uid(), title: "Módulo 1", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [] }] : [] };
     });
   }
   function addModule() {
-    setDraft((d) => ({ ...d, modules: [...(d.modules || []), { id: uid(), title: `Módulo ${(d.modules || []).length + 1}`, body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }] }] }));
+    setDraft((d) => ({ ...d, modules: [...(d.modules || []), { id: uid(), title: `Módulo ${(d.modules || []).length + 1}`, body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [] }] }));
   }
   function removeModule(mi) {
     setDraft((d) => ({ ...d, modules: d.modules.filter((_, i) => i !== mi) }));
@@ -4281,6 +4348,37 @@ function AdminPanel({
   }
   function updateModuleField(mi, field, value) {
     setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, [field]: value } : m)) }));
+  }
+  function handleModuleFileInput(mi, e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      setFileError(`"${file.name}" pesa ${(file.size / 1024 / 1024).toFixed(1)} MB. El límite para adjuntar aquí dentro es de ~3,5 MB. Para archivos más grandes o vídeo, usa un enlace en el campo de vídeo del módulo.`);
+      e.target.value = "";
+      return;
+    }
+    setFileError("");
+    const reader = new FileReader();
+    reader.onload = () => {
+      setDraft((d) => ({
+        ...d,
+        modules: d.modules.map((m, i) =>
+          i === mi
+            ? { ...m, attachments: [...(m.attachments || []), { id: uid(), name: file.name, mimeType: file.type || "application/octet-stream", sizeKB: Math.round(file.size / 1024), data: reader.result }] }
+            : m
+        ),
+      }));
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+  function removeModuleAttachment(mi, attId) {
+    setDraft((d) => {
+      const mod = d.modules[mi];
+      const att = (mod.attachments || []).find((a) => a.id === attId);
+      if (att?.storageKey) deleteKey(att.storageKey);
+      return { ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, attachments: (m.attachments || []).filter((a) => a.id !== attId) } : m)) };
+    });
   }
   function addModuleQuestion(mi) {
     setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, quiz: [...m.quiz, { ...emptyQuestion }] } : m)) }));
@@ -4317,7 +4415,23 @@ function AdminPanel({
       await saveKey(storageKey, { name: att.name, mimeType: att.mimeType, data: att.data });
       finalAttachments.push({ id: att.id, name: att.name, mimeType: att.mimeType, sizeKB: att.sizeKB, storageKey });
     }
-    await onSaveCourse({ ...draft, id: draft.id || uid(), attachments: finalAttachments });
+    // Los adjuntos de cada módulo se suben igual que los de la formación —
+    // cada módulo puede llevar los suyos propios, aparte.
+    const finalModules = [];
+    for (const mod of draft.modules || []) {
+      const modAttachments = [];
+      for (const att of mod.attachments || []) {
+        if (att.storageKey) {
+          modAttachments.push({ id: att.id, name: att.name, mimeType: att.mimeType, sizeKB: att.sizeKB, storageKey: att.storageKey });
+          continue;
+        }
+        const storageKey = `mb_att_${att.id}`;
+        await saveKey(storageKey, { name: att.name, mimeType: att.mimeType, data: att.data });
+        modAttachments.push({ id: att.id, name: att.name, mimeType: att.mimeType, sizeKB: att.sizeKB, storageKey });
+      }
+      finalModules.push({ ...mod, attachments: modAttachments });
+    }
+    await onSaveCourse({ ...draft, id: draft.id || uid(), attachments: finalAttachments, modules: finalModules });
     setSaving(false);
     resetDraft();
     setTab("courses");
@@ -4615,6 +4729,17 @@ function AdminPanel({
                     style={{ borderColor: "#00000018" }}
                   />
 
+                  <div>
+                    <div className="text-[11px] font-semibold text-gray-500 mb-1">Documentos de este módulo (PDF, Word...)</div>
+                    {(mod.attachments || []).map((att) => (
+                      <div key={att.id} className="flex items-center justify-between gap-2 rounded-md px-2 py-1 mb-1" style={{ backgroundColor: "var(--bg-inset)" }}>
+                        <span className="text-xs truncate" style={{ color: "var(--text-primary)" }}>{att.name} <span className="text-[10px] text-gray-400">({att.sizeKB} KB)</span></span>
+                        <button onClick={() => removeModuleAttachment(mi, att.id)} className="text-red-500 flex-shrink-0"><X size={13} /></button>
+                      </div>
+                    ))}
+                    <input type="file" onChange={(e) => handleModuleFileInput(mi, e)} className="text-xs" accept=".pdf,.doc,.docx" />
+                  </div>
+
                   <div className="flex items-center justify-between pt-1">
                     <div className="text-xs font-semibold text-gray-500">Test de este módulo</div>
                     <div className="flex items-center gap-2">
@@ -4682,6 +4807,7 @@ function AdminPanel({
               {[
                 { id: "interno", label: "Preguntas dentro de la app" },
                 { id: "googleform", label: "Google Form (externo)" },
+                { id: "ninguno", label: "Sin test" },
               ].map((m) => (
                 <button
                   key={m.id}
@@ -4698,6 +4824,12 @@ function AdminPanel({
               ))}
             </div>
 
+            {draft.testMode === "ninguno" && (
+              <div className="text-[11px] text-gray-400 rounded-lg border p-3" style={{ borderColor: "#00000018" }}>
+                Sin test: la persona verá el vídeo y/o los documentos, y marcará "Ya la he visto" ella misma para darla por completada — igual que con un Google Form, pero sin ningún formulario externo de por medio.
+              </div>
+            )}
+
             {draft.testMode === "googleform" ? (
               <div className="rounded-lg border p-3" style={{ borderColor: "#00000018" }}>
                 <TextInput
@@ -4710,7 +4842,7 @@ function AdminPanel({
                   El formulario es totalmente tuyo — créalo, edítalo y cámbialo cuando quieras directamente en Google Forms, sin tocar esta app. La app solo lo muestra embebido y deja que la persona marque "completado" al terminar; no puede leer las respuestas ni corregirlo automáticamente. Si necesitas saber quién acertó qué, revisa las respuestas del propio Form (o su Hoja de cálculo vinculada), y usa "Marcar manualmente" en Seguimiento si quieres reflejarlo en la app.
                 </div>
               </div>
-            ) : (
+            ) : draft.testMode === "interno" ? (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs font-semibold text-gray-500">Preguntas del test</div>
@@ -4742,7 +4874,7 @@ function AdminPanel({
                   ))}
                 </div>
               </div>
-            )}
+            ) : null}
           </div>
             </>
           )}
