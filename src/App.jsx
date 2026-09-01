@@ -3794,8 +3794,8 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: "var(--sp-5)", alignItems: "flex-start" }}>
-        <div style={{ ...DS.card, padding: "var(--sp-2)", position: "sticky", top: 72 }}>
+      <div className="mb-module-layout">
+        <div className="mb-module-stepper-wrap" style={{ ...DS.card, padding: "var(--sp-2)" }}>
           <ModuleStepper modules={modules} moduleProgress={moduleProgress} activeIndex={activeIndex} viewedIndex={viewedIndex} onSelect={selectModule} />
         </div>
 
