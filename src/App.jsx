@@ -3,7 +3,7 @@ import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
   Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp, ChevronRight,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
-  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map
+  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { PublicClientApplication } from "@azure/msal-browser";
@@ -248,6 +248,44 @@ function getVideoEmbedUrl(url) {
     return url;
   }
 }
+
+// Enlace directo compartible a una formación o ruta concreta — cualquiera que
+// lo abra entra primero por el acceso normal (con su propio usuario) y, en
+// cuanto se identifica, aterriza directo ahí, sin tener que buscarlo.
+function buildShareLink(type, id) {
+  const url = new URL(window.location.origin + window.location.pathname);
+  url.searchParams.set(type, id);
+  return url.toString();
+}
+
+function CopyLinkButton({ url, label = "Copiar enlace", compact = false }) {
+  const [copied, setCopied] = useState(false);
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch (e) {
+      // Si el navegador bloquea el portapapeles (poco común), no hay mucho más que hacer aquí.
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      title="Copiar un enlace directo a esto"
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 5,
+        fontSize: compact ? 11 : "var(--text-xs)", fontWeight: 600,
+        color: copied ? "var(--success)" : "var(--info)",
+        border: "none", background: "none", cursor: "pointer", padding: 0,
+      }}
+    >
+      {copied ? <Check size={compact ? 11 : 13} /> : <Link2 size={compact ? 11 : 13} />}
+      {copied ? "¡Copiado!" : label}
+    </button>
+  );
+}
+
 
 function isAssignedToUser(course, userName, groups) {
   const a = course.assignment;
@@ -1467,6 +1505,24 @@ export default function AulaVirtualMB() {
   const [selectedPathId, setSelectedPathId] = useState(null);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
+  const [pendingDeepLink, setPendingDeepLink] = useState(null);
+  const [deepLinkError, setDeepLinkError] = useState("");
+
+  // Enlace directo a una formación o ruta: se lee de la URL una sola vez, al
+  // cargar la página — antes de que la persona haya iniciado sesión siquiera.
+  // Se guarda para aplicarlo en cuanto haya alguien identificado.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const linkCourseId = params.get("course");
+    const linkPathId = params.get("path");
+    if (linkCourseId) {
+      setPendingDeepLink({ type: "course", id: linkCourseId });
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (linkPathId) {
+      setPendingDeepLink({ type: "path", id: linkPathId });
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   useEffect(() => {
     setGlobalStorageErrorHandler((msg) => setStorageError(msg));
@@ -1537,6 +1593,29 @@ export default function AulaVirtualMB() {
       setLoading(false);
     })();
   }, []);
+
+  // Aplicar el enlace directo en cuanto haya alguien identificado (recién
+  // logueado, o con sesión ya recordada) y los datos estén cargados.
+  useEffect(() => {
+    if (loading || !currentUser || !pendingDeepLink) return;
+    if (pendingDeepLink.type === "course") {
+      const exists = courses.some((c) => c.id === pendingDeepLink.id);
+      if (exists) {
+        openCourse(pendingDeepLink.id);
+      } else {
+        setDeepLinkError("El enlace que has abierto no corresponde a ninguna formación existente. Puede que se haya eliminado.");
+      }
+    } else if (pendingDeepLink.type === "path") {
+      const exists = paths.some((p) => p.id === pendingDeepLink.id);
+      if (exists) {
+        setSelectedPathId(pendingDeepLink.id);
+        setView("path-detail");
+      } else {
+        setDeepLinkError("El enlace que has abierto no corresponde a ninguna ruta existente. Puede que se haya eliminado.");
+      }
+    }
+    setPendingDeepLink(null);
+  }, [loading, currentUser, pendingDeepLink, courses, paths]);
 
   const activeCourse = useMemo(() => courses.find((c) => c.id === activeCourseId) || null, [courses, activeCourseId]);
 
@@ -2382,6 +2461,20 @@ export default function AulaVirtualMB() {
             </button>
           </div>
         )}
+        {deepLinkError && (
+          <div style={{
+            marginBottom: "var(--sp-5)", padding: "var(--sp-3) var(--sp-4)",
+            borderRadius: "var(--radius-md)", border: "1px solid var(--border)",
+            backgroundColor: "var(--warning-soft)", color: "var(--warning-text)",
+            fontSize: "var(--text-sm)", display: "flex", alignItems: "flex-start", gap: 8,
+          }}>
+            <Link2 size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1 }}>{deepLinkError}</div>
+            <button onClick={() => setDeepLinkError("")} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--warning-text)", padding: 2 }}>
+              <X size={16} />
+            </button>
+          </div>
+        )}
         {view === "dashboard" && (
           <Dashboard
             currentUser={currentUser}
@@ -2458,6 +2551,10 @@ export default function AulaVirtualMB() {
             selectedCategory={selectedCatalogCategory}
             onSelectCategory={setSelectedCatalogCategory}
             paths={paths}
+            onOpenPath={(id) => {
+              setSelectedPathId(id);
+              setView("path-detail");
+            }}
           />
         )}
         {view === "course" && activeCourse && (
@@ -3140,6 +3237,9 @@ function PathDetailView({ path, courses, currentUser, getStatus, onOpenCourse, o
       <div style={{ marginBottom: "var(--sp-4)" }}>
         <h1 style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-1) 0" }}>{path.title}</h1>
         {path.description && <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0, maxWidth: 600 }}>{path.description}</p>}
+        <div style={{ marginTop: "var(--sp-2)" }}>
+          <CopyLinkButton url={buildShareLink("path", path.id)} />
+        </div>
       </div>
 
       <div style={{ ...DS.card, padding: "var(--sp-4)", marginBottom: "var(--sp-5)" }}>
@@ -3254,7 +3354,7 @@ function CategoryPicker({ onSelectCategory }) {
   );
 }
 
-function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory, paths = [] }) {
+function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory, paths = [], onOpenPath }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses;
@@ -3313,21 +3413,60 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
     const matches = visibleCourses.filter(
       (c) => c.title.toLowerCase().includes(query) || (c.description || "").toLowerCase().includes(query) || categoryMeta(c.category).label.toLowerCase().includes(query)
     );
+    const pathMatches = paths.filter(
+      (p) => p.title.toLowerCase().includes(query) || (p.description || "").toLowerCase().includes(query)
+    );
+    const totalResults = matches.length + pathMatches.length;
     return (
       <div>
         {searchBar}
         <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: "var(--sp-3)" }}>
-          {matches.length} resultado{matches.length === 1 ? "" : "s"} para "{searchQuery}"
+          {totalResults} resultado{totalResults === 1 ? "" : "s"} para "{searchQuery}"
         </div>
-        {matches.length === 0 ? (
+        {totalResults === 0 ? (
           <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", padding: "var(--sp-6) 0", textAlign: "center" }}>
-            No hay ninguna formación que coincida. Prueba con otra palabra.
+            No hay nada que coincida. Prueba con otra palabra.
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
-            {matches.map((c) => (
-              <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} pathTitle={pathTitleByCourseId[c.id]} />
-            ))}
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
+            {pathMatches.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 5 }}>
+                  <Map size={12} /> RUTAS DE APRENDIZAJE
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+                  {pathMatches.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => onOpenPath && onOpenPath(p.id)}
+                      style={{ ...DS.card, textAlign: "left", cursor: "pointer", padding: "var(--sp-4)", display: "flex", alignItems: "center", gap: "var(--sp-3)" }}
+                    >
+                      <div style={{ width: 36, height: 36, borderRadius: "var(--radius-md)", backgroundColor: "var(--info-soft)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <Map size={17} style={{ color: "var(--info)" }} />
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{p.title}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{p.courseIds.length} formación{p.courseIds.length === 1 ? "" : "es"}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {matches.length > 0 && (
+              <div>
+                {pathMatches.length > 0 && (
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 5 }}>
+                    <LayoutGrid size={12} /> FORMACIONES
+                  </div>
+                )}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+                  {matches.map((c) => (
+                    <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} pathTitle={pathTitleByCourseId[c.id]} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -3438,6 +3577,9 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
             {course.title}
           </h1>
           <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", maxWidth: 640, margin: 0, lineHeight: 1.5 }}>{course.description}</p>
+          <div style={{ marginTop: "var(--sp-2)" }}>
+            <CopyLinkButton url={buildShareLink("course", course.id)} />
+          </div>
         </div>
         <DeadlineChip deadline={course.deadline} completed={status === "completada"} />
       </div>
@@ -3864,6 +4006,9 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
           {course.title}
         </h1>
         <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0, lineHeight: 1.5, maxWidth: 640 }}>{course.description}</p>
+        <div style={{ marginTop: "var(--sp-2)" }}>
+          <CopyLinkButton url={buildShareLink("course", course.id)} />
+        </div>
       </div>
 
       {/* Progreso dentro de la propia formación */}
@@ -3990,7 +4135,8 @@ function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDelete
               </div>
               <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{p.courseIds.length} {p.courseIds.length === 1 ? "formación" : "formaciones"}</div>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <CopyLinkButton url={buildShareLink("path", p.id)} compact />
               <button onClick={() => startEdit(p)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer" }}>Editar</button>
               <button onClick={() => onDeletePath(p.id)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--danger)", border: "none", background: "none", cursor: "pointer" }}>Eliminar</button>
             </div>
@@ -4253,6 +4399,7 @@ function AdminPanel({
       validityMonths: null,
     });
     setFileError("");
+    setPendingWarnings(null);
   }
   function loadDraft(course) {
     setDraft({
@@ -4265,6 +4412,7 @@ function AdminPanel({
       modules: course.modules ? course.modules.map((m) => ({ ...m, quiz: (m.quiz || []).map((q) => ({ ...q, options: [...q.options] })), attachments: m.attachments ? [...m.attachments] : [] })) : [],
     });
     setFileError("");
+    setPendingWarnings(null);
     setTab("editor");
   }
   function setAssignmentMode(mode) {
@@ -4402,6 +4550,43 @@ function AdminPanel({
   }
   function canSave() {
     return draft.title.trim().length > 0;
+  }
+  // Avisa (sin bloquear) de problemas de contenido que antes pasaban
+  // desapercibidos hasta que un empleado abría la formación y se encontraba
+  // un test roto: preguntas sin texto, sin suficientes opciones, con la
+  // respuesta correcta señalando a una opción vacía, o un Google Form sin
+  // enlace.
+  function getContentWarnings() {
+    const warnings = [];
+    function checkQuiz(quiz, context) {
+      quiz.forEach((q, qi) => {
+        if (!q.question.trim()) warnings.push(`${context}: la pregunta ${qi + 1} no tiene texto.`);
+        const filled = q.options.filter((o) => o.trim().length > 0);
+        if (filled.length < 2) warnings.push(`${context}: la pregunta ${qi + 1} tiene menos de 2 opciones rellenadas.`);
+        else if (!q.options[q.correct] || !q.options[q.correct].trim()) warnings.push(`${context}: la pregunta ${qi + 1} marca como correcta una opción vacía.`);
+      });
+    }
+    const hasModules = draft.modules && draft.modules.length > 0;
+    if (!hasModules) {
+      if (draft.testMode === "interno") {
+        checkQuiz(draft.quiz || [], "Test principal");
+      } else if (draft.testMode === "googleform" && !(draft.googleFormUrl || "").trim()) {
+        warnings.push("Has elegido \"Google Form\" pero no has puesto ningún enlace de formulario.");
+      }
+    } else {
+      (draft.modules || []).forEach((mod, mi) => {
+        const label = `Módulo ${mi + 1}${mod.title ? ` ("${mod.title}")` : ""}`;
+        if (!mod.title || !mod.title.trim()) warnings.push(`Módulo ${mi + 1}: no tiene título.`);
+        if ((mod.quiz || []).length > 0) checkQuiz(mod.quiz, label);
+      });
+    }
+    return warnings;
+  }
+  const [pendingWarnings, setPendingWarnings] = useState(null);
+  function handleSaveClick() {
+    const warnings = getContentWarnings();
+    if (warnings.length > 0) setPendingWarnings(warnings);
+    else handleSave();
   }
   async function handleSave() {
     setSaving(true);
@@ -4601,6 +4786,9 @@ function AdminPanel({
                 )}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                <div style={{ marginRight: 8 }}>
+                  <CopyLinkButton url={buildShareLink("course", c.id)} compact />
+                </div>
                 <button onClick={() => loadDraft(c)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--info)", background: "none", border: "none", cursor: "pointer" }}>
                   Editar
                 </button>
@@ -4742,53 +4930,73 @@ function AdminPanel({
 
                   <div className="flex items-center justify-between pt-1">
                     <div className="text-xs font-semibold text-gray-500">Test de este módulo</div>
-                    <div className="flex items-center gap-2">
-                      <label className="text-[11px] text-gray-400 flex items-center gap-1">
-                        % para aprobar
-                        <input
-                          type="number"
-                          value={mod.passPct}
-                          onChange={(e) => updateModuleField(mi, "passPct", Number(e.target.value))}
-                          className="w-14 text-xs rounded-md border px-1.5 py-1"
-                          style={{ borderColor: "#00000018" }}
-                        />
-                      </label>
-                      <button onClick={() => addModuleQuestion(mi)} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
-                        <Plus size={12} /> Pregunta
-                      </button>
-                    </div>
+                    <button
+                      onClick={() => updateModuleField(mi, "quiz", mod.quiz.length > 0 ? [] : [{ ...emptyQuestion }])}
+                      className="text-[11px] font-semibold px-2.5 py-1 rounded-full border"
+                      style={{
+                        backgroundColor: mod.quiz.length === 0 ? BRAND.red : "white",
+                        color: mod.quiz.length === 0 ? "white" : BRAND.ink,
+                        borderColor: mod.quiz.length === 0 ? BRAND.red : "#00000018",
+                      }}
+                    >
+                      {mod.quiz.length === 0 ? "Sin test ✓" : "Sin test"}
+                    </button>
                   </div>
 
-                  {mod.quiz.map((q, qi) => (
-                    <div key={qi} className="rounded-md p-2 space-y-1.5" style={{ backgroundColor: "var(--bg-inset)" }}>
-                      <div className="flex items-center gap-2">
-                        <input
-                          value={q.question}
-                          onChange={(e) => updateModuleQuestion(mi, qi, "question", e.target.value)}
-                          placeholder={`Pregunta ${qi + 1}`}
-                          className="flex-1 text-xs rounded-md border px-2 py-1"
-                          style={{ borderColor: "#00000018" }}
-                        />
-                        {mod.quiz.length > 1 && (
-                          <button onClick={() => removeModuleQuestion(mi, qi)} className="text-red-500">
-                            <X size={14} />
-                          </button>
-                        )}
-                      </div>
-                      {q.options.map((opt, oi) => (
-                        <div key={oi} className="flex items-center gap-2">
-                          <input type="radio" checked={q.correct === oi} onChange={() => updateModuleQuestion(mi, qi, "correct", oi)} className="flex-shrink-0" />
+                  {mod.quiz.length === 0 ? (
+                    <div className="text-[11px] text-gray-400 rounded-md p-2" style={{ backgroundColor: "var(--bg-inset)" }}>
+                      Este módulo no tiene test — la persona verá el contenido y pulsará "Continuar" para pasar al siguiente módulo, sin preguntas de por medio.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-end gap-2">
+                        <label className="text-[11px] text-gray-400 flex items-center gap-1">
+                          % para aprobar
                           <input
-                            value={opt}
-                            onChange={(e) => updateModuleOption(mi, qi, oi, e.target.value)}
-                            placeholder={`Opción ${oi + 1}`}
-                            className="flex-1 text-xs rounded-md border px-2 py-1"
-                            style={{ borderColor: "#00000015" }}
+                            type="number"
+                            value={mod.passPct}
+                            onChange={(e) => updateModuleField(mi, "passPct", Number(e.target.value))}
+                            className="w-14 text-xs rounded-md border px-1.5 py-1"
+                            style={{ borderColor: "#00000018" }}
                           />
+                        </label>
+                        <button onClick={() => addModuleQuestion(mi)} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
+                          <Plus size={12} /> Pregunta
+                        </button>
+                      </div>
+
+                      {mod.quiz.map((q, qi) => (
+                        <div key={qi} className="rounded-md p-2 space-y-1.5" style={{ backgroundColor: "var(--bg-inset)" }}>
+                          <div className="flex items-center gap-2">
+                            <input
+                              value={q.question}
+                              onChange={(e) => updateModuleQuestion(mi, qi, "question", e.target.value)}
+                              placeholder={`Pregunta ${qi + 1}`}
+                              className="flex-1 text-xs rounded-md border px-2 py-1"
+                              style={{ borderColor: "#00000018" }}
+                            />
+                            {mod.quiz.length > 1 && (
+                              <button onClick={() => removeModuleQuestion(mi, qi)} className="text-red-500">
+                                <X size={14} />
+                              </button>
+                            )}
+                          </div>
+                          {q.options.map((opt, oi) => (
+                            <div key={oi} className="flex items-center gap-2">
+                              <input type="radio" checked={q.correct === oi} onChange={() => updateModuleQuestion(mi, qi, "correct", oi)} className="flex-shrink-0" />
+                              <input
+                                value={opt}
+                                onChange={(e) => updateModuleOption(mi, qi, oi, e.target.value)}
+                                placeholder={`Opción ${oi + 1}`}
+                                className="flex-1 text-xs rounded-md border px-2 py-1"
+                                style={{ borderColor: "#00000015" }}
+                              />
+                            </div>
+                          ))}
                         </div>
                       ))}
-                    </div>
-                  ))}
+                    </>
+                  )}
                 </div>
               ))}
               <button onClick={addModule} className="text-sm font-semibold flex items-center gap-1.5" style={{ color: BRAND.red }}>
@@ -4971,8 +5179,43 @@ function AdminPanel({
             )}
           </div>
 
+          {pendingWarnings && (
+            <div style={{ ...DS.card, padding: "var(--sp-4)", borderLeft: "4px solid var(--warning)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "var(--sp-2)" }}>
+                <AlertTriangle size={16} style={{ color: "var(--warning)" }} />
+                <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>
+                  Antes de guardar, revisa esto
+                </div>
+              </div>
+              <ul style={{ margin: "0 0 var(--sp-3) 0", paddingLeft: 20, fontSize: "var(--text-xs)", color: "var(--text-secondary)", lineHeight: 1.7 }}>
+                {pendingWarnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPendingWarnings(null)}
+                  className="text-xs font-semibold rounded-md px-3 py-1.5 border"
+                  style={{ borderColor: "#00000018", color: BRAND.ink }}
+                >
+                  Volver a revisarlo
+                </button>
+                <button
+                  onClick={() => {
+                    setPendingWarnings(null);
+                    handleSave();
+                  }}
+                  className="text-xs font-semibold rounded-md px-3 py-1.5 text-white"
+                  style={{ backgroundColor: "var(--warning)" }}
+                >
+                  Guardar de todas formas
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-2">
-            <button disabled={!canSave() || saving} onClick={handleSave} className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 transition-all duration-150 active:scale-[0.98]" style={{ backgroundColor: BRAND.red }}>
+            <button disabled={!canSave() || saving} onClick={handleSaveClick} className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 transition-all duration-150 active:scale-[0.98]" style={{ backgroundColor: BRAND.red }}>
               {saving ? "Guardando..." : "Guardar formación"}
             </button>
             <button
