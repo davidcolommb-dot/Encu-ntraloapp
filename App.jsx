@@ -3,9 +3,10 @@ import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
   Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp, ChevronRight,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
-  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search
+  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
+import { PublicClientApplication } from "@azure/msal-browser";
 import * as XLSX from "xlsx";
 
 // Credenciales de Supabase: se leen de variables de entorno (ver .env.example).
@@ -14,6 +15,37 @@ import * as XLSX from "xlsx";
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+// Inicio de sesión con la cuenta de Microsoft 365 (opcional — convive con el
+// acceso por nombre y contraseña, no lo sustituye). Solo se activa si estas
+// dos variables están rellenas; si no, el botón simplemente no aparece, para
+// no romper nada en despliegues donde todavía no se haya configurado Azure.
+const msalClientId = import.meta.env.VITE_MSAL_CLIENT_ID || "";
+const msalTenantId = import.meta.env.VITE_MSAL_TENANT_ID || "";
+const msalIsConfigured = !!(msalClientId && msalTenantId);
+let msalInstancePromise = null;
+function getMsalInstance() {
+  if (!msalInstancePromise) {
+    const pca = new PublicClientApplication({
+      auth: {
+        clientId: msalClientId,
+        authority: `https://login.microsoftonline.com/${msalTenantId}`,
+        redirectUri: window.location.origin,
+      },
+      cache: { cacheLocation: "sessionStorage" },
+    });
+    msalInstancePromise = pca.initialize().then(() => pca);
+  }
+  return msalInstancePromise;
+}
+// Abre la ventana de acceso de Microsoft y devuelve el email + nombre de la
+// persona una vez confirmada su identidad. No devuelve ninguna contraseña —
+// eso lo comprueba Microsoft, nunca esta aplicación.
+async function loginWithMicrosoftPopup() {
+  const pca = await getMsalInstance();
+  const result = await pca.loginPopup({ scopes: ["User.Read"] });
+  return { email: result.account.username, name: result.account.name };
+}
 
 const BRAND = {
   red: "#E9312B",
@@ -217,9 +249,52 @@ function getVideoEmbedUrl(url) {
   }
 }
 
+// Enlace directo compartible a una formación o ruta concreta — cualquiera que
+// lo abra entra primero por el acceso normal (con su propio usuario) y, en
+// cuanto se identifica, aterriza directo ahí, sin tener que buscarlo.
+function buildShareLink(type, id) {
+  const url = new URL(window.location.origin + window.location.pathname);
+  url.searchParams.set(type, id);
+  return url.toString();
+}
+
+function CopyLinkButton({ url, label = "Copiar enlace", compact = false }) {
+  const [copied, setCopied] = useState(false);
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch (e) {
+      // Si el navegador bloquea el portapapeles (poco común), no hay mucho más que hacer aquí.
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      title="Copiar un enlace directo a esto"
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 5,
+        fontSize: compact ? 11 : "var(--text-xs)", fontWeight: 600,
+        color: copied ? "var(--success)" : "var(--info)",
+        border: "none", background: "none", cursor: "pointer", padding: 0,
+      }}
+    >
+      {copied ? <Check size={compact ? 11 : 13} /> : <Link2 size={compact ? 11 : 13} />}
+      {copied ? "¡Copiado!" : label}
+    </button>
+  );
+}
+
+
 function isAssignedToUser(course, userName, groups) {
   const a = course.assignment;
-  if (!a || a.mode === "todos") return true;
+  if (!a) return true;
+  // Nombres añadidos automáticamente (p. ej. por la ruta de bienvenida al dar de
+  // alta a alguien nuevo) cuentan siempre, sin importar el modo de asignación —
+  // así no hace falta tocar "todos/grupos/personas" para que esto funcione.
+  if ((a.extraNames || []).includes(userName)) return true;
+  if (a.mode === "todos") return true;
   if (a.mode === "individual") return (a.employeeNames || []).includes(userName);
   if (a.mode === "grupos") {
     const userGroupIds = groups.filter((g) => (g.memberNames || []).includes(userName)).map((g) => g.id);
@@ -843,27 +918,71 @@ function ProgressRing({ percent, size = 64, color = BRAND.red, label }) {
   );
 }
 
-function RatingStars({ rating, onRate }) {
+function RatingStars({ rating, ratingComment, awaitingRating, onRate }) {
+  const [selected, setSelected] = useState(rating || 0);
   const [hover, setHover] = useState(0);
+  const [comment, setComment] = useState(ratingComment || "");
+  const [submitted, setSubmitted] = useState(!awaitingRating && !!rating);
+
+  if (submitted) {
+    return (
+      <div style={{ ...DS.card, padding: "var(--sp-4)", display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+        <div style={{ display: "flex", gap: 2 }}>
+          {[1, 2, 3, 4, 5].map((n) => (
+            <Star key={n} size={16} fill={selected >= n ? "var(--warning)" : "none"} color={selected >= n ? "var(--warning)" : "var(--border-strong)"} />
+          ))}
+        </div>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>Gracias por tu valoración.</div>
+        <button onClick={() => setSubmitted(false)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer", marginLeft: "auto" }}>
+          Cambiarla
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ ...DS.card, padding: "var(--sp-4)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-3)", flexWrap: "wrap" }}>
-      <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
-        {rating ? "Gracias por tu valoración" : "¿Te ha resultado útil esta formación?"}
+    <div style={{ ...DS.card, padding: "var(--sp-4)", display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+      <div>
+        <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
+          ¿Qué te ha parecido esta formación?
+        </div>
+        {awaitingRating && (
+          <div style={{ fontSize: "var(--text-xs)", color: "var(--warning-text)", backgroundColor: "var(--warning-soft)", display: "inline-block", padding: "2px 8px", borderRadius: "var(--radius-full)", marginTop: 4, fontWeight: 500 }}>
+            Falta esto para dar la formación por completada
+          </div>
+        )}
       </div>
       <div style={{ display: "flex", gap: 2 }}>
         {[1, 2, 3, 4, 5].map((n) => (
           <button
             key={n}
-            onClick={() => onRate(n)}
+            onClick={() => setSelected(n)}
             onMouseEnter={() => setHover(n)}
             onMouseLeave={() => setHover(0)}
             style={{ border: "none", background: "none", cursor: "pointer", padding: 2, display: "flex" }}
             title={`${n} estrella${n === 1 ? "" : "s"}`}
           >
-            <Star size={22} fill={(hover || rating) >= n ? "var(--warning)" : "none"} color={(hover || rating) >= n ? "var(--warning)" : "var(--border-strong)"} />
+            <Star size={24} fill={(hover || selected) >= n ? "var(--warning)" : "none"} color={(hover || selected) >= n ? "var(--warning)" : "var(--border-strong)"} />
           </button>
         ))}
       </div>
+      <textarea
+        value={comment}
+        onChange={(e) => setComment(e.target.value)}
+        placeholder="Algún comentario, sugerencia o mejora (opcional)"
+        rows={2}
+        style={{ width: "100%", fontSize: "var(--text-sm)", padding: "8px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontFamily: "inherit", resize: "vertical" }}
+      />
+      <button
+        disabled={selected === 0}
+        onClick={() => {
+          onRate(selected, comment);
+          setSubmitted(true);
+        }}
+        style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: selected === 0 ? 0.4 : 1, width: "fit-content" }}
+      >
+        {awaitingRating ? "Enviar y completar formación" : "Guardar valoración"}
+      </button>
     </div>
   );
 }
@@ -1023,6 +1142,18 @@ function TextField({ label, value, onChange, type = "text", placeholder, onEnter
   );
 }
 
+function MicrosoftLogo({ size = 16 }) {
+  const s = size / 2;
+  return (
+    <svg width={size} height={size} viewBox="0 0 21 21" style={{ flexShrink: 0 }}>
+      <rect x="1" y="1" width="9" height="9" fill="#F25022" />
+      <rect x="11" y="1" width="9" height="9" fill="#7FBA00" />
+      <rect x="1" y="11" width="9" height="9" fill="#00A4EF" />
+      <rect x="11" y="11" width="9" height="9" fill="#FFB900" />
+    </svg>
+  );
+}
+
 function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCreatePassword, onAdminLogin, onAdminSetup }) {
   // menu | employee-password | employee-verify-email | employee-create-password | admin-password | admin-create-password
   const [mode, setMode] = useState("menu");
@@ -1033,6 +1164,34 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
   const [newPass2, setNewPass2] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [msBusy, setMsBusy] = useState(false);
+  const [msError, setMsError] = useState("");
+
+  async function handleMicrosoftLogin() {
+    setMsError("");
+    setMsBusy(true);
+    try {
+      const { email } = await loginWithMicrosoftPopup();
+      const normalized = email.trim().toLowerCase();
+      const match = employees.find((e) => e.email && e.email.trim().toLowerCase() === normalized);
+      if (match) {
+        onEmployeeLogin(match.name);
+      } else {
+        setMsError(`Tu cuenta de Microsoft (${email}) todavía no está registrada aquí. Pide a tu administrador que te dé de alta con este mismo email.`);
+      }
+    } catch (err) {
+      console.error("Error de inicio de sesión con Microsoft:", err);
+      if (err?.errorCode !== "user_cancelled") {
+        // Mostramos el detalle técnico (código + mensaje de MSAL) para poder
+        // diagnosticar problemas de configuración de Azure — no es un dato
+        // sensible, es información de depuración normal en este tipo de fallo.
+        const detail = err?.errorCode ? `${err.errorCode}${err.errorMessage ? " — " + err.errorMessage.split("\n")[0] : ""}` : String(err?.message || err);
+        setMsError(`No se pudo completar el inicio de sesión con Microsoft. Detalle: ${detail}`);
+      }
+    } finally {
+      setMsBusy(false);
+    }
+  }
 
   function normalize(s) {
     return s.trim().replace(/\s+/g, " ").toLowerCase();
@@ -1136,6 +1295,25 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
 
         {mode === "menu" && (
           <div>
+            {msalIsConfigured && (
+              <>
+                <button
+                  disabled={msBusy}
+                  onClick={handleMicrosoftLogin}
+                  className="w-full flex items-center justify-center gap-2.5 text-sm font-semibold rounded-lg py-2.5 border transition hover:bg-gray-50 disabled:opacity-60"
+                  style={{ borderColor: "var(--border)", color: "var(--text-primary)" }}
+                >
+                  {msBusy ? <Loader2 size={15} className="animate-spin" /> : <MicrosoftLogo size={15} />}
+                  Iniciar sesión con Microsoft
+                </button>
+                {msError && <div className="text-xs mt-2" style={{ color: "var(--danger)" }}>{msError}</div>}
+                <div className="flex items-center gap-2 my-4">
+                  <div className="flex-1 h-px bg-gray-100" />
+                  <span className="text-[11px] text-gray-400">o con tu nombre y contraseña</span>
+                  <div className="flex-1 h-px bg-gray-100" />
+                </div>
+              </>
+            )}
             {employees.length === 0 ? (
               <div className="text-sm text-gray-500 text-center py-4 px-2">
                 Todavía no hay empleados registrados. Entra como administrador para añadir el primero.
@@ -1312,6 +1490,7 @@ export default function AulaVirtualMB() {
   const [completionsByCourse, setCompletionsByCourse] = useState({});
   const [employees, setEmployees] = useState([]);
   const [groups, setGroups] = useState([]);
+  const [paths, setPaths] = useState([]);
   const [adminPasswordHash, setAdminPasswordHash] = useState("");
   const [lastBackupAt, setLastBackupAt] = useState(null);
   const [sheetsUrl, setSheetsUrl] = useState("");
@@ -1322,8 +1501,28 @@ export default function AulaVirtualMB() {
   const [view, setView] = useState("dashboard");
   const [selectedCatalogCategory, setSelectedCatalogCategory] = useState(null);
   const [activeCourseId, setActiveCourseId] = useState(null);
+  const [courseOrigin, setCourseOrigin] = useState("catalog");
+  const [selectedPathId, setSelectedPathId] = useState(null);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
+  const [pendingDeepLink, setPendingDeepLink] = useState(null);
+  const [deepLinkError, setDeepLinkError] = useState("");
+
+  // Enlace directo a una formación o ruta: se lee de la URL una sola vez, al
+  // cargar la página — antes de que la persona haya iniciado sesión siquiera.
+  // Se guarda para aplicarlo en cuanto haya alguien identificado.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const linkCourseId = params.get("course");
+    const linkPathId = params.get("path");
+    if (linkCourseId) {
+      setPendingDeepLink({ type: "course", id: linkCourseId });
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (linkPathId) {
+      setPendingDeepLink({ type: "path", id: linkPathId });
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   useEffect(() => {
     setGlobalStorageErrorHandler((msg) => setStorageError(msg));
@@ -1332,7 +1531,7 @@ export default function AulaVirtualMB() {
 
   useEffect(() => {
     (async () => {
-      const [c, n, emp, grp, pwHash, lastBk, sUrl] = await Promise.all([
+      const [c, n, emp, grp, pwHash, lastBk, sUrl, pth] = await Promise.all([
         loadKey("mb_courses", null),
         loadKey("mb_news", null),
         loadKey("mb_employees", []),
@@ -1340,6 +1539,7 @@ export default function AulaVirtualMB() {
         loadKey("mb_admin_pin", ""),
         loadKey("mb_last_backup_at", null),
         loadKey("mb_sheets_webapp_url", ""),
+        loadKey("mb_paths", []),
       ]);
       let finalCourses = c;
       let finalNews = n;
@@ -1356,10 +1556,10 @@ export default function AulaVirtualMB() {
       // (no sabemos el valor original una vez creado), así que esas personas simplemente
       // crean su contraseña de nuevo la próxima vez, verificando su email.
       const normalizedEmployees = (emp || []).map((e) => {
-        if (typeof e === "string") return { name: e, passwordHash: null, email: "" };
+        if (typeof e === "string") return { name: e, passwordHash: null, email: "", managedGroupIds: [] };
         const { pin, pinProvided, ...rest } = e;
         const validHash = isValidHash(rest.passwordHash) ? rest.passwordHash : null;
-        return { email: "", ...rest, passwordHash: validHash };
+        return { email: "", managedGroupIds: [], ...rest, passwordHash: validHash };
       });
       setCourses(finalCourses);
       setNews(finalNews);
@@ -1372,6 +1572,7 @@ export default function AulaVirtualMB() {
       setAdminPasswordHash(isValidHash(pwHash) ? pwHash : "");
       setLastBackupAt(lastBk);
       setSheetsUrl(sUrl || "");
+      setPaths(pth || []);
 
       // Sesión recordada en este navegador: si hay una guardada y sigue siendo válida,
       // entra directamente sin volver a pedir nombre/contraseña.
@@ -1392,6 +1593,29 @@ export default function AulaVirtualMB() {
       setLoading(false);
     })();
   }, []);
+
+  // Aplicar el enlace directo en cuanto haya alguien identificado (recién
+  // logueado, o con sesión ya recordada) y los datos estén cargados.
+  useEffect(() => {
+    if (loading || !currentUser || !pendingDeepLink) return;
+    if (pendingDeepLink.type === "course") {
+      const exists = courses.some((c) => c.id === pendingDeepLink.id);
+      if (exists) {
+        openCourse(pendingDeepLink.id);
+      } else {
+        setDeepLinkError("El enlace que has abierto no corresponde a ninguna formación existente. Puede que se haya eliminado.");
+      }
+    } else if (pendingDeepLink.type === "path") {
+      const exists = paths.some((p) => p.id === pendingDeepLink.id);
+      if (exists) {
+        setSelectedPathId(pendingDeepLink.id);
+        setView("path-detail");
+      } else {
+        setDeepLinkError("El enlace que has abierto no corresponde a ninguna ruta existente. Puede que se haya eliminado.");
+      }
+    }
+    setPendingDeepLink(null);
+  }, [loading, currentUser, pendingDeepLink, courses, paths]);
 
   const activeCourse = useMemo(() => courses.find((c) => c.id === activeCourseId) || null, [courses, activeCourseId]);
 
@@ -1435,10 +1659,11 @@ export default function AulaVirtualMB() {
     await saveKey(`mb_completions_course_${courseId}`, updated);
   }
 
-  async function openCourse(courseId) {
+  async function openCourse(courseId, origin = "catalog") {
     setActiveCourseId(courseId);
     setQuizAnswers({});
     setQuizResult(null);
+    setCourseOrigin(origin);
     setView("course");
     await ensureCourseCompletionsLoaded(courseId);
     markStarted(courseId);
@@ -1460,11 +1685,15 @@ export default function AulaVirtualMB() {
     const updated = {
       ...current,
       [currentUser]: {
-        status: passed ? "completada" : "en_progreso",
+        // Aprobar el test ya no marca "completada" directamente: falta la
+        // valoración obligatoria. awaitingRating es lo que la interfaz usa
+        // para saber que toca pedirla antes de dar la formación por hecha.
+        status: "en_progreso",
         startedAt: prev.startedAt || todayISO(),
-        completedAt: passed ? todayISO() : null,
+        completedAt: null,
         score,
         attempts: (prev.attempts || 0) + 1,
+        awaitingRating: passed,
       },
     };
     setCompletionsByCourse((prevState) => ({ ...prevState, [activeCourse.id]: updated }));
@@ -1473,9 +1702,9 @@ export default function AulaVirtualMB() {
   }
 
   // Formaciones "por módulos": cada módulo tiene su propio mini-test, y hay que
-  // aprobar uno para desbloquear el siguiente. El progreso se guarda por módulo
-  // dentro del mismo registro de la formación; la formación entera se marca
-  // "completada" solo cuando todos los módulos están aprobados.
+  // aprobar uno para desbloquear el siguiente. Al aprobar el último módulo, la
+  // formación queda "a la espera de valoración" — no se da por completada del
+  // todo hasta que la persona puntúa (ver rateCourse).
   async function submitModuleQuiz(courseId, moduleObj) {
     if (!currentUser) return null;
     const quiz = moduleObj.quiz || [];
@@ -1504,9 +1733,10 @@ export default function AulaVirtualMB() {
 
     const updatedRec = {
       ...prevRec,
-      status: allPassed ? "completada" : "en_progreso",
+      status: "en_progreso",
       moduleProgress,
-      completedAt: allPassed ? todayISO() : null,
+      completedAt: null,
+      awaitingRating: allPassed,
     };
     const updated = { ...current, [currentUser]: updatedRec };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
@@ -1524,27 +1754,42 @@ export default function AulaVirtualMB() {
     const updated = {
       ...current,
       [currentUser]: {
-        status: "completada",
+        status: "en_progreso",
         startedAt: prev.startedAt || todayISO(),
-        completedAt: todayISO(),
+        completedAt: null,
         score: null,
         selfReported: true,
         attempts: (prev.attempts || 0) + 1,
+        awaitingRating: true,
       },
     };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
     await saveKey(`mb_completions_course_${courseId}`, updated);
   }
 
-  // Valoración rápida (1-5 estrellas) que la persona puede dejar tras completar
-  // una formación. No obliga a nadie ni bloquea nada — es solo feedback opcional
-  // para que el administrador vea qué formaciones funcionan mejor.
-  async function rateCourse(courseId, rating) {
+  // Valoración (1-5 estrellas + comentario opcional). Ahora es el paso que
+  // realmente cierra una formación: si estaba "a la espera de valoración"
+  // (awaitingRating), al valorar pasa a "completada" de verdad, con fecha de
+  // hoy. Si ya estaba completada de antes (por ejemplo, alguien que cambia su
+  // valoración más adelante), simplemente actualiza la nota sin tocar el resto.
+  async function rateCourse(courseId, rating, comment) {
     if (!currentUser) return;
     const current = await loadKey(`mb_completions_course_${courseId}`, {});
     const prev = current[currentUser];
     if (!prev) return;
-    const updated = { ...current, [currentUser]: { ...prev, rating } };
+    const wasAwaiting = !!prev.awaitingRating;
+    const updated = {
+      ...current,
+      [currentUser]: {
+        ...prev,
+        rating,
+        ratingComment: comment || "",
+        ratedAt: todayISO(),
+        status: wasAwaiting ? "completada" : prev.status,
+        completedAt: wasAwaiting ? todayISO() : prev.completedAt,
+        awaitingRating: false,
+      },
+    };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
     await saveKey(`mb_completions_course_${courseId}`, updated);
   }
@@ -1586,6 +1831,51 @@ export default function AulaVirtualMB() {
   const overdueForUser = useMemo(() => pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) < 0), [pendingForUser]);
   const dueSoonForUser = useMemo(() => pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) >= 0 && daysUntil(c.deadline) <= 3), [pendingForUser]);
   const alertCount = overdueForUser.length + dueSoonForUser.length;
+
+  const pathsForUser = useMemo(() => {
+    if (!currentUser) return [];
+    return paths.filter((p) => isAssignedToUser(p, currentUser, groups));
+  }, [paths, currentUser, groups]);
+
+  // Rutas que todavía no ha terminado (al menos una formación pendiente dentro)
+  // — esto es lo que dispara el aviso en Inicio y el número en la pestaña "Rutas".
+  const pendingPathsForUser = useMemo(() => {
+    if (!currentUser) return [];
+    return pathsForUser.filter((p) => {
+      const pathCourses = p.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+      if (pathCourses.length === 0) return false;
+      return pathCourses.some((c) => getStatus(currentUser, c.id) !== "completada");
+    });
+  }, [pathsForUser, courses, currentUser, completionsByCourse]);
+
+  // Si la persona que ha iniciado sesión es responsable de algún equipo, esto
+  // no está vacío — determina si ve la pestaña "Mi equipo" y con qué alcance.
+  const myManagedGroupIds = useMemo(() => {
+    if (!currentUser) return [];
+    return employees.find((e) => e.name === currentUser)?.managedGroupIds || [];
+  }, [employees, currentUser]);
+
+  // Estado de cada miembro del equipo que gestiona esta persona (si es
+  // responsable de alguno) — para el panel visual en su propio Inicio.
+  const myTeamStatus = useMemo(() => {
+    if (myManagedGroupIds.length === 0) return [];
+    const memberNames = new Set();
+    for (const g of groups) {
+      if (myManagedGroupIds.includes(g.id)) {
+        for (const n of g.memberNames || []) memberNames.add(n);
+      }
+    }
+    return Array.from(memberNames).map((name) => {
+      let pending = 0, overdue = 0;
+      for (const c of courses) {
+        if (!isAssignedToUser(c, name, groups)) continue;
+        if (getStatus(name, c.id) === "completada") continue;
+        pending++;
+        if (c.deadline && daysUntil(c.deadline) < 0) overdue++;
+      }
+      return { name, pending, overdue };
+    });
+  }, [myManagedGroupIds, groups, courses, completionsByCourse]);
 
   const assignedCountForUser = useMemo(() => {
     if (!currentUser) return 0;
@@ -1635,6 +1925,24 @@ export default function AulaVirtualMB() {
     const updated = groups.map((g) => (g.id === id ? { ...g, memberNames } : g));
     setGroups(updated);
     saveKey("mb_groups", updated);
+  }
+
+  // Rutas de aprendizaje: encadenan formaciones completas ya existentes, en un
+  // orden fijo. No necesitan su propio sistema de progreso — se calcula sobre
+  // la marcha a partir del estado real de cada formación (getStatus), así que
+  // si alguien ya había completado una formación antes de que se creara la
+  // ruta, ya cuenta hecha dentro de la ruta también.
+  async function savePath(path) {
+    let updated;
+    if (paths.find((p) => p.id === path.id)) updated = paths.map((p) => (p.id === path.id ? path : p));
+    else updated = [...paths, path];
+    setPaths(updated);
+    await saveKey("mb_paths", updated);
+  }
+  async function deletePath(id) {
+    const updated = paths.filter((p) => p.id !== id);
+    setPaths(updated);
+    await saveKey("mb_paths", updated);
   }
 
   async function saveSheetsUrl(url) {
@@ -1724,9 +2032,31 @@ export default function AulaVirtualMB() {
 
   async function addEmployee(name, email) {
     if (!name.trim() || employees.some((e) => e.name === name.trim())) return;
-    const updated = [...employees, { name: name.trim(), passwordHash: null, email: email.trim() }];
+    const trimmedName = name.trim();
+    const updated = [...employees, { name: trimmedName, passwordHash: null, email: email.trim() }];
     setEmployees(updated);
-    saveKey("mb_employees", updated);
+    await saveKey("mb_employees", updated);
+    await assignWelcomePathsToNewEmployees([trimmedName]);
+  }
+
+  // Si hay alguna ruta marcada como "de bienvenida", cualquier persona nueva
+  // (dada de alta una a una o importada por Excel) queda apuntada a ella sola,
+  // sin que el administrador tenga que asignarla a mano cada vez. No toca el
+  // modo de asignación de la ruta (todos/grupos/personas) — solo añade a la
+  // lista de "extras" que isAssignedToUser también comprueba.
+  async function assignWelcomePathsToNewEmployees(newNames) {
+    if (newNames.length === 0) return;
+    const current = await loadKey("mb_paths", paths);
+    const welcomePaths = (current || []).filter((p) => p.isWelcomePath);
+    if (welcomePaths.length === 0) return;
+    const updated = (current || []).map((p) => {
+      if (!p.isWelcomePath) return p;
+      const existingExtra = p.assignment?.extraNames || [];
+      const merged = Array.from(new Set([...existingExtra, ...newNames]));
+      return { ...p, assignment: { ...(p.assignment || { mode: "individual", groupIds: [], employeeNames: [] }), extraNames: merged } };
+    });
+    setPaths(updated);
+    await saveKey("mb_paths", updated);
   }
   async function removeEmployee(name) {
     const updated = employees.filter((e) => e.name !== name);
@@ -1755,6 +2085,16 @@ export default function AulaVirtualMB() {
     const updated = employees.map((e) => (e.name === name ? { ...e, email } : e));
     setEmployees(updated);
     saveKey("mb_employees", updated);
+  }
+
+  // Marca a alguien como "responsable" de uno o varios grupos: al entrar con su
+  // nombre y contraseña de siempre, verá además la pestaña "Mi equipo" con
+  // acceso reducido (su gente y su seguimiento, no toda la empresa) — pero
+  // puede crear formaciones para cualquier equipo, no solo el suyo.
+  async function updateEmployeeManagedGroups(name, groupIds) {
+    const updated = employees.map((e) => (e.name === name ? { ...e, managedGroupIds: groupIds } : e));
+    setEmployees(updated);
+    await saveKey("mb_employees", updated);
   }
 
   // Renombrar a alguien es delicado: su nombre se usa como identificador en
@@ -1812,11 +2152,13 @@ export default function AulaVirtualMB() {
   async function importEmployeesBulk(rows) {
     let updatedEmployees = [...employees];
     let updatedGroups = [...groups];
+    const newlyCreatedNames = [];
 
     for (const row of rows) {
       const existingIdx = updatedEmployees.findIndex((e) => e.name.trim().toLowerCase() === row.name.trim().toLowerCase());
       if (existingIdx === -1) {
         updatedEmployees.push({ name: row.name, passwordHash: null, email: row.email || "" });
+        newlyCreatedNames.push(row.name);
       } else {
         updatedEmployees[existingIdx] = {
           ...updatedEmployees[existingIdx],
@@ -1841,6 +2183,7 @@ export default function AulaVirtualMB() {
     setGroups(updatedGroups);
     await saveKey("mb_employees", updatedEmployees);
     await saveKey("mb_groups", updatedGroups);
+    await assignWelcomePathsToNewEmployees(newlyCreatedNames);
   }
 
   async function saveCourse(course) {
@@ -1860,6 +2203,13 @@ export default function AulaVirtualMB() {
     if (course?.attachments) {
       for (const att of course.attachments) {
         if (att.storageKey) await deleteKey(att.storageKey);
+      }
+    }
+    if (course?.modules) {
+      for (const mod of course.modules) {
+        for (const att of mod.attachments || []) {
+          if (att.storageKey) await deleteKey(att.storageKey);
+        }
       }
     }
     await deleteKey(`mb_completions_course_${id}`);
@@ -1972,31 +2322,29 @@ export default function AulaVirtualMB() {
     <div style={{ minHeight: "100vh", backgroundColor: "var(--bg-page)", fontFamily: "var(--font-sans)", color: "var(--text-primary)" }}>
       {/* ── HEADER ── */}
       <header style={{ position: "sticky", top: 0, zIndex: 20, backgroundColor: "var(--bg-card)", borderBottom: "1px solid var(--border)" }}>
-        <div style={{ maxWidth: 960, margin: "0 auto", padding: "0 var(--sp-4)" }}>
+        <div className="mb-header-container">
           <div className="mb-header-inner">
             {/* Logo + nombre */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-              <img src="/logo-mb.png" alt="Muñoz Bosch" style={{ height: 26, width: "auto" }} />
-              <span className="mb-app-name" style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-muted)", letterSpacing: "-0.01em" }}>
-                Aula Virtual
-              </span>
+              <img src="/logo-mb.png" alt="Muñoz Bosch" className="mb-logo" />
             </div>
 
             {/* Nav tabs */}
-            <nav style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto", marginRight: 8, flexShrink: 1, overflowX: "auto" }}>
+            <nav className="mb-nav" style={{ display: "flex", alignItems: "center", marginLeft: "auto", flexShrink: 1, overflowX: "auto" }}>
               {[
                 { id: "dashboard", label: "Inicio", icon: Home },
                 ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
                 { id: "catalog", label: "Catálogo", icon: LayoutGrid },
-                ...(isAdmin ? [{ id: "admin", label: "Admin", icon: Settings }] : []),
+                ...(currentUser ? [{ id: "routes", label: "Rutas", icon: Map, count: pendingPathsForUser.length }] : []),
               ].map((t) => {
-                const active = view === t.id || (view === "course" && t.id === "catalog");
+                const active = view === t.id || (view === "course" && t.id === "catalog" && courseOrigin !== "path") || (view === "path-detail" && t.id === "routes") || (view === "course" && t.id === "routes" && courseOrigin === "path");
                 return (
                   <button
                     key={t.id}
                     className="mb-nav-btn"
                     onClick={() => {
                       if (t.id === "catalog" && view !== "course") setSelectedCatalogCategory(null);
+                      if (t.id === "routes") setSelectedPathId(null);
                       setView(t.id);
                     }}
                     style={{
@@ -2029,9 +2377,9 @@ export default function AulaVirtualMB() {
             </nav>
 
             {/* User area */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <div className="mb-user-area" style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
               {currentUser && (
-                <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 10px 4px 4px", borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)" }}>
+                <div className="mb-user-pill" style={{ display: "flex", alignItems: "center", borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)" }}>
                   <Avatar name={currentUser} size={24} />
                   <span className="mb-user-name" style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{currentUser.split(" ")[0]}</span>
                   <button onClick={logout} title="Cerrar sesión" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex", padding: 2 }}>
@@ -2039,10 +2387,33 @@ export default function AulaVirtualMB() {
                   </button>
                 </div>
               )}
+              {myManagedGroupIds.length > 0 && (
+                <button
+                  onClick={() => setView("team")}
+                  className="mb-role-pill"
+                  style={{
+                    display: "flex", alignItems: "center", borderRadius: "var(--radius-full)",
+                    backgroundColor: "var(--info-soft)", border: view === "team" ? "1.5px solid var(--info)" : "1.5px solid transparent", cursor: "pointer",
+                  }}
+                  title="Mi equipo"
+                >
+                  <Users size={13} style={{ color: "var(--info)" }} />
+                  <span className="mb-admin-label" style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)" }}>Mi equipo</span>
+                </button>
+              )}
               {isAdmin && (
-                <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--brand-soft)" }}>
-                  <ShieldCheck size={13} style={{ color: "var(--brand)" }} />
-                  <span className="mb-admin-label" style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)" }}>Admin</span>
+                <div className="mb-role-pill" style={{
+                  display: "flex", alignItems: "center", borderRadius: "var(--radius-full)",
+                  backgroundColor: "var(--brand-soft)", border: view === "admin" ? "1.5px solid var(--brand)" : "1.5px solid transparent",
+                }}>
+                  <button
+                    onClick={() => setView("admin")}
+                    style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: "none", cursor: "pointer", padding: 0 }}
+                    title="Ir a Administración"
+                  >
+                    <ShieldCheck size={13} style={{ color: "var(--brand)" }} />
+                    <span className="mb-admin-label" style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)" }}>Admin</span>
+                  </button>
                   <button onClick={logoutAdmin} title="Salir" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--brand)", display: "flex", padding: 2, opacity: 0.7 }}>
                     <LogOut size={12} />
                   </button>
@@ -2090,6 +2461,20 @@ export default function AulaVirtualMB() {
             </button>
           </div>
         )}
+        {deepLinkError && (
+          <div style={{
+            marginBottom: "var(--sp-5)", padding: "var(--sp-3) var(--sp-4)",
+            borderRadius: "var(--radius-md)", border: "1px solid var(--border)",
+            backgroundColor: "var(--warning-soft)", color: "var(--warning-text)",
+            fontSize: "var(--text-sm)", display: "flex", alignItems: "flex-start", gap: 8,
+          }}>
+            <Link2 size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1 }}>{deepLinkError}</div>
+            <button onClick={() => setDeepLinkError("")} style={{ border: "none", background: "none", cursor: "pointer", color: "var(--warning-text)", padding: 2 }}>
+              <X size={16} />
+            </button>
+          </div>
+        )}
         {view === "dashboard" && (
           <Dashboard
             currentUser={currentUser}
@@ -2101,7 +2486,26 @@ export default function AulaVirtualMB() {
             points={pointsForUser}
             level={levelForUser}
             badges={badgesForUser}
+            pendingPaths={pendingPathsForUser}
+            courses={courses}
+            getStatus={getStatus}
             onOpenCourse={openCourse}
+            onContinuePath={(path) => {
+              const pathCourses = path.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+              const next = currentUser ? pathCourses.find((c) => getStatus(currentUser, c.id) !== "completada") : pathCourses[0];
+              setSelectedPathId(path.id);
+              if (next) {
+                openCourse(next.id, "path");
+              } else {
+                setView("path-detail");
+              }
+            }}
+            onGoToCatalog={() => {
+              setSelectedCatalogCategory(null);
+              setView("catalog");
+            }}
+            myTeamStatus={myTeamStatus}
+            onOpenTeam={() => setView("team")}
             onOpenNewsLink={(item) => {
               if (item.linkType === "course" && item.linkId) {
                 openCourse(item.linkId);
@@ -2115,6 +2519,28 @@ export default function AulaVirtualMB() {
         {view === "alerts" && (
           <AlertsView overdueForUser={overdueForUser} dueSoonForUser={dueSoonForUser} onOpenCourse={openCourse} />
         )}
+        {view === "routes" && (
+          <RoutesListView
+            paths={pathsForUser}
+            courses={courses}
+            currentUser={currentUser}
+            getStatus={getStatus}
+            onOpenPath={(id) => {
+              setSelectedPathId(id);
+              setView("path-detail");
+            }}
+          />
+        )}
+        {view === "path-detail" && selectedPathId && (
+          <PathDetailView
+            path={paths.find((p) => p.id === selectedPathId)}
+            courses={courses}
+            currentUser={currentUser}
+            getStatus={getStatus}
+            onOpenCourse={(courseId) => openCourse(courseId, "path")}
+            onBack={() => setView("routes")}
+          />
+        )}
         {view === "catalog" && (
           <Catalog
             courses={courses}
@@ -2124,6 +2550,11 @@ export default function AulaVirtualMB() {
             onOpenCourse={openCourse}
             selectedCategory={selectedCatalogCategory}
             onSelectCategory={setSelectedCatalogCategory}
+            paths={paths}
+            onOpenPath={(id) => {
+              setSelectedPathId(id);
+              setView("path-detail");
+            }}
           />
         )}
         {view === "course" && activeCourse && (
@@ -2142,8 +2573,8 @@ export default function AulaVirtualMB() {
               setQuizResult(null);
             }}
             onSelfReport={() => selfReportComplete(activeCourse.id)}
-            onRateCourse={(rating) => rateCourse(activeCourse.id, rating)}
-            onBack={() => setView("catalog")}
+            onRateCourse={(rating, comment) => rateCourse(activeCourse.id, rating, comment)}
+            onBack={() => setView(courseOrigin === "path" ? "path-detail" : "catalog")}
             onRetry={() => {
               setQuizAnswers({});
               setQuizResult(null);
@@ -2171,13 +2602,53 @@ export default function AulaVirtualMB() {
             onRemoveEmployee={removeEmployee}
             onResetEmployeePassword={resetEmployeePassword}
             onUpdateEmployeeEmail={updateEmployeeEmail}
+            onUpdateEmployeeManagedGroups={updateEmployeeManagedGroups}
+            paths={paths}
+            onSavePath={savePath}
+            onDeletePath={deletePath}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
             onDeleteGroup={deleteGroup}
             onUpdateGroupMembers={updateGroupMembers}
             onManualSetStatus={manualSetStatus}
-            onLoadSeedExamples={loadSeedExamples}
+            onExportBackup={exportBackup}
+            onImportBackup={importBackup}
+          />
+        )}
+        {view === "team" && myManagedGroupIds.length > 0 && (
+          <AdminPanel
+            mode="team"
+            restrictToGroupIds={myManagedGroupIds}
+            courses={courses}
+            news={news}
+            employees={employees}
+            groups={groups}
+            completionsByCourse={completionsByCourse}
+            loadingTracking={loadingTracking}
+            lastBackupAt={lastBackupAt}
+            sheetsUrl={sheetsUrl}
+            onSaveSheetsUrl={saveSheetsUrl}
+            onLoadTracking={loadAllCompletionsForTracking}
+            onSaveCourse={saveCourse}
+            onDeleteCourse={deleteCourse}
+            onAddNews={addNews}
+            onUpdateNews={updateNews}
+            onDeleteNews={deleteNews}
+            onAddEmployee={addEmployee}
+            onRemoveEmployee={removeEmployee}
+            onResetEmployeePassword={resetEmployeePassword}
+            onUpdateEmployeeEmail={updateEmployeeEmail}
+            onUpdateEmployeeManagedGroups={updateEmployeeManagedGroups}
+            paths={paths}
+            onSavePath={savePath}
+            onDeletePath={deletePath}
+            onRenameEmployee={renameEmployee}
+            onImportEmployeesBulk={importEmployeesBulk}
+            onAddGroup={addGroup}
+            onDeleteGroup={deleteGroup}
+            onUpdateGroupMembers={updateGroupMembers}
+            onManualSetStatus={manualSetStatus}
             onExportBackup={exportBackup}
             onImportBackup={importBackup}
           />
@@ -2243,7 +2714,7 @@ function StatusPill({ icon: Icon, label, variant }) {
   );
 }
 
-function CourseCard({ course, status, onOpen }) {
+function CourseCard({ course, status, onOpen, pathTitle }) {
   const meta = categoryMeta(course.category);
   const completed = status === "completada";
   const days = course.deadline ? daysUntil(course.deadline) : null;
@@ -2272,6 +2743,12 @@ function CourseCard({ course, status, onOpen }) {
           <CategoryTag id={course.category} small />
           <DeadlineChip deadline={course.deadline} completed={completed} />
         </div>
+
+        {pathTitle && (
+          <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, color: "var(--info)" }}>
+            <Map size={11} /> Parte de la ruta: {pathTitle}
+          </div>
+        )}
 
         {/* Title */}
         <div style={{ fontSize: "var(--text-base)", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.35 }}>
@@ -2309,7 +2786,7 @@ function CourseCard({ course, status, onOpen }) {
 
 /* ── HOME ── */
 
-function WelcomeBar({ currentUser, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level }) {
+function WelcomeBar({ currentUser, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges }) {
   if (!currentUser) return null;
   const firstName = currentUser.split(" ")[0];
   const hour = new Date().getHours();
@@ -2319,36 +2796,43 @@ function WelcomeBar({ currentUser, pendingForUser, completedForUser, assignedCou
   const allDone = assignedCountForUser > 0 && pendingForUser.length === 0;
   const noneAssigned = assignedCountForUser === 0;
 
-  let statusVariant = "warning", statusIcon = Clock, statusLabel = `${pendingForUser.length} formación${pendingForUser.length === 1 ? "" : "es"} pendiente${pendingForUser.length === 1 ? "" : "s"}`;
+  let statusVariant = "warning", statusIcon = Clock, statusLabel = `${pendingForUser.length} formaci${pendingForUser.length === 1 ? "ón" : "ones"} pendiente${pendingForUser.length === 1 ? "" : "s"}`;
   if (noneAssigned) { statusVariant = "neutral"; statusIcon = Home; statusLabel = "Sin formaciones asignadas"; }
   else if (allDone) { statusVariant = "success"; statusIcon = CheckCircle2; statusLabel = "Estás al día"; }
   else if (overdueCount > 0) { statusVariant = "danger"; statusIcon = AlertTriangle; statusLabel = `${overdueCount} vencida${overdueCount === 1 ? "" : "s"}`; }
 
   return (
-    <div style={{ ...DS.card, padding: "var(--sp-5)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-4)", flexWrap: "wrap" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
-        <Avatar name={currentUser} size={44} />
-        <div>
-          <div style={{ fontSize: "var(--text-lg)", fontWeight: 600, color: "var(--text-primary)" }}>
-            {greeting}, {firstName}
-          </div>
-          <div style={{ marginTop: 4 }}>
-            <StatusPill icon={statusIcon} label={statusLabel} variant={statusVariant} />
-          </div>
-        </div>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-5)" }}>
-        {!noneAssigned && (
-          <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
-            <Trophy size={16} style={{ color: level.color }} />
-            <div>
-              <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-primary)" }}>{points} pts · {level.name}</div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{level.nextMin != null ? `${level.nextMin - points} para subir` : "Máximo"}</div>
+    <div style={{ ...DS.card, padding: "var(--sp-5)", display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-4)", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)" }}>
+          <Avatar name={currentUser} size={44} />
+          <div>
+            <div style={{ fontSize: "var(--text-lg)", fontWeight: 600, color: "var(--text-primary)" }}>
+              {greeting}, {firstName}
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <StatusPill icon={statusIcon} label={statusLabel} variant={statusVariant} />
             </div>
           </div>
-        )}
-        {!noneAssigned && <ProgressRing percent={progressPercent} size={52} color="var(--brand)" label={`${completedForUser.length}/${assignedCountForUser}`} />}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-5)" }}>
+          {!noneAssigned && (
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-2)" }}>
+              <Trophy size={16} style={{ color: level.color }} />
+              <div>
+                <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-primary)" }}>{points} pts · {level.name}</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{level.nextMin != null ? `${level.nextMin - points} para subir` : "Máximo"}</div>
+              </div>
+            </div>
+          )}
+          {!noneAssigned && <ProgressRing percent={progressPercent} size={52} color="var(--brand)" label={`${completedForUser.length}/${assignedCountForUser}`} />}
+        </div>
       </div>
+      {badges && badges.length > 0 && (
+        <div style={{ paddingTop: "var(--sp-2)", borderTop: "1px solid var(--border)" }}>
+          <BadgesRow badges={badges} />
+        </div>
+      )}
     </div>
   );
 }
@@ -2391,20 +2875,81 @@ function ContinueCard({ course, onOpen }) {
   );
 }
 
-function QuickStats({ pending, completed, total, progressPercent }) {
-  const stats = [
-    { label: "Pendientes", value: pending, color: pending > 0 ? "var(--warning)" : "var(--text-muted)" },
-    { label: "Completadas", value: completed, color: "var(--success)" },
-    { label: "Progreso", value: `${progressPercent}%`, color: "var(--brand)" },
-  ];
+function RouteCard({ path, courses, currentUser, getStatus, onContinue }) {
+  if (!path) return null;
+  const pathCourses = path.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+  const doneCount = pathCourses.filter((c) => getStatus(currentUser, c.id) === "completada").length;
+  const percent = pathCourses.length ? Math.round((doneCount / pathCourses.length) * 100) : 0;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "var(--sp-3)" }}>
-      {stats.map((s) => (
-        <div key={s.label} style={{ padding: "var(--sp-4)", borderRadius: "var(--radius-lg)", backgroundColor: "var(--bg-inset)", textAlign: "center" }}>
-          <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: s.color }}>{s.value}</div>
-          <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: 2 }}>{s.label}</div>
+    <div style={{ ...DS.card, padding: "var(--sp-5)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--sp-4)", flexWrap: "wrap" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-4)", flex: 1, minWidth: 200 }}>
+        <div style={{ width: 48, height: 48, borderRadius: "var(--radius-lg)", backgroundColor: "var(--info-soft)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Map size={22} style={{ color: "var(--info)" }} />
         </div>
-      ))}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text-muted)", marginBottom: 2 }}>Ruta en marcha</div>
+          <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.3 }}>{path.title}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+            <div style={{ flex: 1, maxWidth: 140, height: 6, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${percent}%`, backgroundColor: "var(--info)", borderRadius: "var(--radius-full)" }} />
+            </div>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{doneCount}/{pathCourses.length}</span>
+          </div>
+        </div>
+      </div>
+      <button
+        onClick={onContinue}
+        style={{
+          padding: "8px 20px", borderRadius: "var(--radius-md)",
+          backgroundColor: "var(--info)", color: "var(--text-inverse)",
+          border: "none", cursor: "pointer", fontSize: "var(--text-sm)",
+          fontWeight: 600, display: "flex", alignItems: "center", gap: 6,
+        }}
+      >
+        Continuar <ChevronRight size={15} />
+      </button>
+    </div>
+  );
+}
+
+function TeamStatusPanel({ teamStatus, onOpenTeam }) {
+  const withIssues = teamStatus.filter((m) => m.pending > 0).sort((a, b) => b.overdue - a.overdue || b.pending - a.pending);
+  const allGood = withIssues.length === 0;
+  return (
+    <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: allGood ? 0 : "var(--sp-3)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Users size={16} style={{ color: "var(--brand)" }} />
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>Tu equipo</span>
+        </div>
+        <button onClick={onOpenTeam} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+          Ver todo <ChevronRight size={13} />
+        </button>
+      </div>
+      {allGood ? (
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--success-text)", display: "flex", alignItems: "center", gap: 6 }}>
+          <CheckCircle2 size={14} /> Todo tu equipo está al día.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {withIssues.slice(0, 5).map((m) => (
+            <div key={m.name} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                <Avatar name={m.name} size={22} />
+                <span style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</span>
+              </div>
+              <StatusPill
+                icon={m.overdue > 0 ? AlertTriangle : Clock}
+                label={m.overdue > 0 ? `${m.overdue} vencida${m.overdue === 1 ? "" : "s"}` : `${m.pending} pendiente${m.pending === 1 ? "" : "s"}`}
+                variant={m.overdue > 0 ? "danger" : "warning"}
+              />
+            </div>
+          ))}
+          {withIssues.length > 5 && (
+            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>y {withIssues.length - 5} persona{withIssues.length - 5 === 1 ? "" : "s"} más con algo pendiente…</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -2431,7 +2976,7 @@ function BadgesRow({ badges }) {
   );
 }
 
-function NewsCard({ item, featured, onOpen }) {
+function NewsCard({ item, featured, onOpen, isDone }) {
   const cat = item.linkType === "category" ? categoryMeta(item.linkId) : null;
   const accentColor = cat ? cat.color : "var(--info)";
   const clickable = item.linkType === "course" || item.linkType === "category";
@@ -2445,6 +2990,7 @@ function NewsCard({ item, featured, onOpen }) {
       style={{
         ...DS.card, cursor: clickable ? "pointer" : "default",
         display: "flex", transition: "all var(--dur-base) var(--ease-out)",
+        opacity: isDone ? 0.65 : 1,
       }}
       onMouseEnter={(e) => { if (clickable) Object.assign(e.currentTarget.style, DS.cardHover, { transform: "translateY(-1px)" }); }}
       onMouseLeave={(e) => { if (clickable) Object.assign(e.currentTarget.style, { boxShadow: "none", transform: "none", borderColor: "var(--border)" }); }}
@@ -2453,7 +2999,7 @@ function NewsCard({ item, featured, onOpen }) {
       <div style={{ padding: featured ? "var(--sp-5)" : "var(--sp-4)", flex: 1 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: "var(--sp-2)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            {isNew && <StatusPill label="Nuevo" variant="success" />}
+            {isNew && !isDone && <StatusPill label="Nuevo" variant="success" />}
             <span style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
               <Icon size={11} /> {cat ? cat.label : "General"}
             </span>
@@ -2465,25 +3011,34 @@ function NewsCard({ item, featured, onOpen }) {
         </div>
         {featured && item.body && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: 1.5, marginTop: "var(--sp-2)" }}>{item.body}</div>}
         {clickable && (
-          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)", display: "flex", alignItems: "center", gap: 4, marginTop: "var(--sp-3)" }}>
-            {item.linkType === "course" ? "Ir a la formación" : "Ver campo"} <ChevronRight size={13} />
-          </div>
+          isDone ? (
+            <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--success)", display: "flex", alignItems: "center", gap: 4, marginTop: "var(--sp-3)" }}>
+              <CheckCircle2 size={13} /> Ya completada
+            </div>
+          ) : (
+            <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)", display: "flex", alignItems: "center", gap: 4, marginTop: "var(--sp-3)" }}>
+              {item.linkType === "course" ? "Ir a la formación" : "Ver campo"} <ChevronRight size={13} />
+            </div>
+          )
         )}
       </div>
     </div>
   );
 }
 
-function NewsPanel({ news, onOpenNewsLink }) {
+function NewsPanel({ news, onOpenNewsLink, currentUser, getStatus }) {
   if (news.length === 0) return null;
   const [featured, ...rest] = news;
+  function isItemDone(item) {
+    return !!(currentUser && item.linkType === "course" && item.linkId && getStatus(currentUser, item.linkId) === "completada");
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
-      <NewsCard item={featured} featured onOpen={() => onOpenNewsLink(featured)} />
+      <NewsCard item={featured} featured onOpen={() => onOpenNewsLink(featured)} isDone={isItemDone(featured)} />
       {rest.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-3)" }}>
           {rest.slice(0, 4).map((n) => (
-            <NewsCard key={n.id} item={n} onOpen={() => onOpenNewsLink(n)} />
+            <NewsCard key={n.id} item={n} onOpen={() => onOpenNewsLink(n)} isDone={isItemDone(n)} />
           ))}
         </div>
       )}
@@ -2491,9 +3046,20 @@ function NewsPanel({ news, onOpenNewsLink }) {
   );
 }
 
-function Dashboard({ currentUser, news, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges, onOpenCourse, onOpenNewsLink }) {
-  // Formación más urgente para "Continuar"
-  const continueTarget = pendingForUser.length > 0 ? pendingForUser[0] : null;
+function Dashboard({ currentUser, news, pendingForUser, completedForUser, assignedCountForUser, progressPercent, points, level, badges, pendingPaths, courses, getStatus, onOpenCourse, onContinuePath, onOpenNewsLink, onGoToCatalog, myTeamStatus, onOpenTeam }) {
+  const topPending = pendingForUser.length > 0 ? pendingForUser[0] : null;
+  const topIsOverdue = !!(topPending && topPending.deadline && daysUntil(topPending.deadline) < 0);
+  const activePath = pendingPaths && pendingPaths.length > 0 ? pendingPaths[0] : null;
+
+  // Prioridad de la tarjeta principal: una formación vencida se cuela siempre
+  // por delante; si no hay nada vencido, manda la ruta en marcha; si no hay
+  // ruta, la formación pendiente más urgente de siempre.
+  let mainCardType = "none";
+  if (topIsOverdue) mainCardType = "course";
+  else if (activePath) mainCardType = "path";
+  else if (topPending) mainCardType = "course";
+
+  const remainingPendingCount = pendingForUser.length - (mainCardType === "course" && topPending ? 1 : 0);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
@@ -2505,44 +3071,33 @@ function Dashboard({ currentUser, news, pendingForUser, completedForUser, assign
         progressPercent={progressPercent}
         points={points}
         level={level}
+        badges={badges}
       />
 
-      {currentUser && continueTarget && (
-        <ContinueCard course={continueTarget} onOpen={() => onOpenCourse(continueTarget.id)} />
+      {myTeamStatus && myTeamStatus.length > 0 && (
+        <TeamStatusPanel teamStatus={myTeamStatus} onOpenTeam={onOpenTeam} />
       )}
 
-      {currentUser && assignedCountForUser > 0 && (
-        <QuickStats pending={pendingForUser.length} completed={completedForUser.length} total={assignedCountForUser} progressPercent={progressPercent} />
+      {mainCardType === "path" && (
+        <RouteCard path={activePath} courses={courses} currentUser={currentUser} getStatus={getStatus} onContinue={() => onContinuePath(activePath)} />
+      )}
+      {mainCardType === "course" && topPending && (
+        <ContinueCard course={topPending} onOpen={() => onOpenCourse(topPending.id)} />
       )}
 
-      {currentUser && badges.length > 0 && <BadgesRow badges={badges} />}
-
-      {currentUser && pendingForUser.length > 1 && (
-        <div>
-          <SectionTitle icon={Clock}>Formaciones pendientes</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
-            {pendingForUser.slice(1).map((c) => (
-              <CourseCard key={c.id} course={c} status="pendiente" onOpen={() => onOpenCourse(c.id)} />
-            ))}
-          </div>
-        </div>
+      {remainingPendingCount > 0 && (
+        <button
+          onClick={onGoToCatalog}
+          style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer", textAlign: "left", padding: 0, display: "flex", alignItems: "center", gap: 4, width: "fit-content" }}
+        >
+          Y {remainingPendingCount} {remainingPendingCount === 1 ? "formación" : "formaciones"} más pendiente{remainingPendingCount === 1 ? "" : "s"} <ChevronRight size={14} />
+        </button>
       )}
 
       {news.length > 0 && (
         <div>
           <SectionTitle icon={Newspaper}>Novedades</SectionTitle>
-          <NewsPanel news={news} onOpenNewsLink={onOpenNewsLink} />
-        </div>
-      )}
-
-      {currentUser && completedForUser.length > 0 && (
-        <div>
-          <SectionTitle icon={CheckCircle2}>Completadas</SectionTitle>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)", opacity: 0.7 }}>
-            {completedForUser.map((c) => (
-              <CourseCard key={c.id} course={c} status="completada" onOpen={() => onOpenCourse(c.id)} />
-            ))}
-          </div>
+          <NewsPanel news={news} onOpenNewsLink={onOpenNewsLink} currentUser={currentUser} getStatus={getStatus} />
         </div>
       )}
     </div>
@@ -2578,7 +3133,7 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
             </div>
             <div>
               <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--danger-text)" }}>Vencidas</div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{overdueForUser.length} formación{overdueForUser.length === 1 ? "" : "es"} con el plazo pasado</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{overdueForUser.length} {overdueForUser.length === 1 ? "formación" : "formaciones"} con el plazo pasado</div>
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
@@ -2595,7 +3150,7 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
             </div>
             <div>
               <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--warning-text)" }}>Próximas a vencer</div>
-              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{dueSoonForUser.length} formación{dueSoonForUser.length === 1 ? "" : "es"} con 3 días o menos</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{dueSoonForUser.length} {dueSoonForUser.length === 1 ? "formación" : "formaciones"} con 3 días o menos</div>
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
@@ -2606,6 +3161,136 @@ function AlertsView({ overdueForUser, dueSoonForUser, onOpenCourse }) {
     </div>
   );
 }
+
+/* ---------- Rutas de aprendizaje (encadenan formaciones completas) ---------- */
+
+function RoutesListView({ paths, courses, currentUser, getStatus, onOpenPath }) {
+  if (paths.length === 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--sp-3)", padding: "var(--sp-16) 0", textAlign: "center" }}>
+        <div style={{ width: 48, height: 48, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <Map size={20} style={{ color: "var(--text-muted)" }} />
+        </div>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", maxWidth: 300 }}>
+          Todavía no tienes ninguna ruta de aprendizaje asignada. Una ruta agrupa varias formaciones en un orden concreto.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ marginBottom: "var(--sp-5)" }}>
+        <h2 style={{ fontSize: "var(--text-xl)", fontWeight: 600, color: "var(--text-primary)", margin: 0 }}>Rutas de aprendizaje</h2>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", marginTop: 2 }}>Itinerarios de varias formaciones, en orden</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+        {paths.map((p) => {
+          const pathCourses = p.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+          const doneCount = currentUser ? pathCourses.filter((c) => getStatus(currentUser, c.id) === "completada").length : 0;
+          const percent = pathCourses.length ? Math.round((doneCount / pathCourses.length) * 100) : 0;
+          return (
+            <button
+              key={p.id}
+              onClick={() => onOpenPath(p.id)}
+              style={{ ...DS.card, textAlign: "left", cursor: "pointer", padding: "var(--sp-5)", display: "flex", flexDirection: "column", gap: "var(--sp-3)", transition: "all var(--dur-base) var(--ease-out)" }}
+              onMouseEnter={(e) => Object.assign(e.currentTarget.style, { boxShadow: "var(--shadow-md)", transform: "translateY(-2px)" })}
+              onMouseLeave={(e) => Object.assign(e.currentTarget.style, { boxShadow: "none", transform: "none" })}
+            >
+              <div style={{ width: 40, height: 40, borderRadius: "var(--radius-md)", backgroundColor: "var(--info-soft)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Map size={19} style={{ color: "var(--info)" }} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: "var(--text-md)", color: "var(--text-primary)" }}>{p.title}</div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginTop: 2 }}>{pathCourses.length} {pathCourses.length === 1 ? "formación" : "formaciones"}</div>
+              </div>
+              <div>
+                <div style={{ height: 6, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden", marginBottom: 4 }}>
+                  <div style={{ height: "100%", width: `${percent}%`, backgroundColor: percent === 100 ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)" }} />
+                </div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{doneCount}/{pathCourses.length} completadas · {percent}%</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function PathDetailView({ path, courses, currentUser, getStatus, onOpenCourse, onBack }) {
+  if (!path) return null;
+  const pathCourses = path.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+  const statuses = pathCourses.map((c) => (currentUser ? getStatus(currentUser, c.id) : "pendiente"));
+  const doneCount = statuses.filter((s) => s === "completada").length;
+  const percent = pathCourses.length ? Math.round((doneCount / pathCourses.length) * 100) : 0;
+  const firstUnpassedIndex = statuses.findIndex((s) => s !== "completada");
+  const activeIndex = firstUnpassedIndex === -1 ? pathCourses.length - 1 : firstUnpassedIndex;
+  const allDone = firstUnpassedIndex === -1;
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content", marginBottom: "var(--sp-4)" }}>
+        <ChevronLeft size={15} /> Rutas de aprendizaje
+      </button>
+
+      <div style={{ marginBottom: "var(--sp-4)" }}>
+        <h1 style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-1) 0" }}>{path.title}</h1>
+        {path.description && <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0, maxWidth: 600 }}>{path.description}</p>}
+        <div style={{ marginTop: "var(--sp-2)" }}>
+          <CopyLinkButton url={buildShareLink("path", path.id)} />
+        </div>
+      </div>
+
+      <div style={{ ...DS.card, padding: "var(--sp-4)", marginBottom: "var(--sp-5)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
+            {allDone ? "🎉 Ruta completada" : `${doneCount} de ${pathCourses.length} formaciones completadas`}
+          </span>
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--brand)" }}>{percent}%</span>
+        </div>
+        <div style={{ height: 8, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${percent}%`, backgroundColor: allDone ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)", transition: "width 0.4s var(--ease-out)" }} />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+        {pathCourses.map((c, i) => {
+          const status = statuses[i];
+          const passed = status === "completada";
+          const locked = i > activeIndex;
+          return (
+            <button
+              key={c.id}
+              disabled={locked}
+              onClick={() => onOpenCourse(c.id)}
+              style={{
+                ...DS.card, textAlign: "left", cursor: locked ? "not-allowed" : "pointer",
+                padding: "var(--sp-3) var(--sp-4)", display: "flex", alignItems: "center", gap: "var(--sp-3)",
+                opacity: locked ? 0.55 : 1, transition: "all var(--dur-fast) var(--ease-out)",
+              }}
+            >
+              <span style={{
+                width: 28, height: 28, borderRadius: "var(--radius-full)", flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700,
+                backgroundColor: passed ? "var(--success)" : locked ? "var(--bg-inset)" : "var(--brand)",
+                color: passed || !locked ? "white" : "var(--text-muted)",
+              }}>
+                {passed ? <CheckCircle2 size={14} /> : locked ? <Lock size={12} /> : i + 1}
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
+                <CategoryTag id={c.category} small />
+              </div>
+              {!locked && !passed && <ChevronRight size={16} style={{ color: "var(--text-muted)", flexShrink: 0 }} />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 
 
 function shadeColor(hex, percent) {
@@ -2669,10 +3354,22 @@ function CategoryPicker({ onSelectCategory }) {
   );
 }
 
-function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory }) {
+function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory, paths = [], onOpenPath }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses;
+
+  // Mapa courseId -> título de la primera ruta a la que pertenece (si alguna),
+  // para la etiqueta "Parte de la ruta: ..." en las tarjetas.
+  const pathTitleByCourseId = useMemo(() => {
+    const map = {};
+    for (const p of paths) {
+      for (const cid of p.courseIds) {
+        if (!map[cid]) map[cid] = p.title;
+      }
+    }
+    return map;
+  }, [paths]);
 
   if (visibleCourses.length === 0) {
     return (
@@ -2716,21 +3413,60 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
     const matches = visibleCourses.filter(
       (c) => c.title.toLowerCase().includes(query) || (c.description || "").toLowerCase().includes(query) || categoryMeta(c.category).label.toLowerCase().includes(query)
     );
+    const pathMatches = paths.filter(
+      (p) => p.title.toLowerCase().includes(query) || (p.description || "").toLowerCase().includes(query)
+    );
+    const totalResults = matches.length + pathMatches.length;
     return (
       <div>
         {searchBar}
         <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: "var(--sp-3)" }}>
-          {matches.length} resultado{matches.length === 1 ? "" : "s"} para "{searchQuery}"
+          {totalResults} resultado{totalResults === 1 ? "" : "s"} para "{searchQuery}"
         </div>
-        {matches.length === 0 ? (
+        {totalResults === 0 ? (
           <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", padding: "var(--sp-6) 0", textAlign: "center" }}>
-            No hay ninguna formación que coincida. Prueba con otra palabra.
+            No hay nada que coincida. Prueba con otra palabra.
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
-            {matches.map((c) => (
-              <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} />
-            ))}
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
+            {pathMatches.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 5 }}>
+                  <Map size={12} /> RUTAS DE APRENDIZAJE
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+                  {pathMatches.map((p) => (
+                    <button
+                      key={p.id}
+                      onClick={() => onOpenPath && onOpenPath(p.id)}
+                      style={{ ...DS.card, textAlign: "left", cursor: "pointer", padding: "var(--sp-4)", display: "flex", alignItems: "center", gap: "var(--sp-3)" }}
+                    >
+                      <div style={{ width: 36, height: 36, borderRadius: "var(--radius-md)", backgroundColor: "var(--info-soft)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <Map size={17} style={{ color: "var(--info)" }} />
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{p.title}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{p.courseIds.length} formación{p.courseIds.length === 1 ? "" : "es"}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {matches.length > 0 && (
+              <div>
+                {pathMatches.length > 0 && (
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 5 }}>
+                    <LayoutGrid size={12} /> FORMACIONES
+                  </div>
+                )}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
+                  {matches.map((c) => (
+                    <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} pathTitle={pathTitleByCourseId[c.id]} />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -2776,7 +3512,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
           {pendingCourses.map((c) => (
-            <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} />
+            <CourseCard key={c.id} course={c} status={currentUser ? getStatus(currentUser, c.id) : "pendiente"} onOpen={() => onOpenCourse(c.id)} pathTitle={pathTitleByCourseId[c.id]} />
           ))}
         </div>
       )}
@@ -2826,6 +3562,7 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
   const quiz = course.quiz || [];
   const allAnswered = quiz.every((_, i) => quizAnswers[i] !== undefined);
   const isGoogleForm = course.testMode === "googleform" && course.googleFormUrl;
+  const isNoTest = course.testMode === "ninguno";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)", maxWidth: 760 }}>
@@ -2840,6 +3577,9 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
             {course.title}
           </h1>
           <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", maxWidth: 640, margin: 0, lineHeight: 1.5 }}>{course.description}</p>
+          <div style={{ marginTop: "var(--sp-2)" }}>
+            <CopyLinkButton url={buildShareLink("course", course.id)} />
+          </div>
         </div>
         <DeadlineChip deadline={course.deadline} completed={status === "completada"} />
       </div>
@@ -2908,6 +3648,8 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
           <div>
             {status === "completada" ? (
               <StatusPill icon={CheckCircle2} label={`Completado ${record?.completedAt ? `el ${record.completedAt}` : ""}`} variant="success" />
+            ) : record?.awaitingRating ? (
+              <StatusPill icon={Star} label="Formulario recibido — valóralo abajo para terminar" variant="warning" />
             ) : (
               <button
                 disabled={!currentUser}
@@ -2921,7 +3663,31 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
         </div>
       )}
 
-      {!isGoogleForm && quiz.length > 0 && (
+      {isNoTest && (
+        <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
+          <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: "var(--sp-3)", display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
+            <CheckCircle2 size={16} style={{ color: "var(--brand)" }} />
+            Esta formación no tiene test
+          </div>
+          <div>
+            {status === "completada" ? (
+              <StatusPill icon={CheckCircle2} label={`Completado ${record?.completedAt ? `el ${record.completedAt}` : ""}`} variant="success" />
+            ) : record?.awaitingRating ? (
+              <StatusPill icon={Star} label="Visto — valóralo abajo para terminar" variant="warning" />
+            ) : (
+              <button
+                disabled={!currentUser}
+                onClick={onSelfReport}
+                style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !currentUser ? 0.4 : 1 }}
+              >
+                Ya la he visto
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!isGoogleForm && !isNoTest && quiz.length > 0 && (
         <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
           <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: "var(--sp-3)", display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
             <ClipboardList size={16} style={{ color: "var(--brand)" }} />
@@ -2945,7 +3711,7 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
               }}>
                 {quizResult.passed ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
                 {quizResult.passed
-                  ? `Superado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%)`
+                  ? `Superado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%). Valórala abajo para completar la formación.`
                   : `No alcanzado — ${quizResult.correctCount}/${quizResult.total} correctas (${quizResult.score}%). Necesitas ${course.passPct ?? 70}%.`}
               </div>
               {!quizResult.passed && (
@@ -2995,8 +3761,8 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
         </div>
       )}
 
-      {status === "completada" && currentUser && (
-        <RatingStars rating={record?.rating || 0} onRate={onRateCourse} />
+      {(status === "completada" || record?.awaitingRating) && currentUser && (
+        <RatingStars rating={record?.rating || 0} ratingComment={record?.ratingComment} awaitingRating={!!record?.awaitingRating} onRate={onRateCourse} />
       )}
     </div>
   );
@@ -3082,9 +3848,44 @@ function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers
         </div>
       )}
 
+      {(mod.attachments || []).length > 0 && (
+        <div>
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <FileText size={13} /> DOCUMENTOS DE ESTE MÓDULO
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+            {mod.attachments.map((att) => (
+              <AttachmentViewer key={att.id} att={att} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {showReadOnlyPassed && (
         <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", backgroundColor: "var(--bg-inset)", padding: "var(--sp-3)", borderRadius: "var(--radius-md)" }}>
           Ya superaste este módulo — lo estás revisando. No hace falta repetir el test.
+        </div>
+      )}
+
+      {/* Módulo sin preguntas: no hay nada que responder, solo un botón para
+          seguir adelante — sin este botón, un módulo sin test se quedaría
+          bloqueado para siempre, porque nunca se dispararía el desbloqueo. */}
+      {!alreadyPassed && !showResultBanner && quiz.length === 0 && (
+        <button
+          onClick={onSubmit}
+          style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content" }}
+        >
+          Continuar
+        </button>
+      )}
+      {showResultBanner && quiz.length === 0 && quizResult.passed && !isLastModule && (
+        <button onClick={onContinue} style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content", display: "flex", alignItems: "center", gap: 6 }}>
+          Ir al siguiente módulo <ChevronRight size={15} />
+        </button>
+      )}
+      {showResultBanner && quiz.length === 0 && quizResult.passed && isLastModule && (
+        <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--success-text)" }}>
+          🎉 ¡Último módulo visto! Solo falta valorar la formación, abajo del todo, para darla por completada.
         </div>
       )}
 
@@ -3120,7 +3921,7 @@ function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers
               )}
               {quizResult.passed && isLastModule && (
                 <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--success-text)" }}>
-                  🎉 ¡Formación completada entera! Ya puedes volver al catálogo cuando quieras.
+                  🎉 ¡Último módulo superado! Solo falta valorar la formación, abajo del todo, para darla por completada.
                 </div>
               )}
             </div>
@@ -3205,6 +4006,9 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
           {course.title}
         </h1>
         <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0, lineHeight: 1.5, maxWidth: 640 }}>{course.description}</p>
+        <div style={{ marginTop: "var(--sp-2)" }}>
+          <CopyLinkButton url={buildShareLink("course", course.id)} />
+        </div>
       </div>
 
       {/* Progreso dentro de la propia formación */}
@@ -3220,8 +4024,8 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: "var(--sp-5)", alignItems: "flex-start" }}>
-        <div style={{ ...DS.card, padding: "var(--sp-2)", position: "sticky", top: 72 }}>
+      <div className="mb-module-layout">
+        <div className="mb-module-stepper-wrap" style={{ ...DS.card, padding: "var(--sp-2)" }}>
           <ModuleStepper modules={modules} moduleProgress={moduleProgress} activeIndex={activeIndex} viewedIndex={viewedIndex} onSelect={selectModule} />
         </div>
 
@@ -3243,7 +4047,9 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
               />
             )}
           </div>
-          {allDone && currentUser && <RatingStars rating={record?.rating || 0} onRate={onRateCourse} />}
+          {allDone && currentUser && (
+            <RatingStars rating={record?.rating || 0} ratingComment={record?.ratingComment} awaitingRating={!!record?.awaitingRating} onRate={onRateCourse} />
+          )}
         </div>
       </div>
     </div>
@@ -3264,6 +4070,229 @@ function TextInput({ label, value, onChange, placeholder, type = "text" }) {
         style={{ borderColor: "#00000020" }}
       />
     </label>
+  );
+}
+
+function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDeletePath, mode = "full" }) {
+  const emptyAssignment = { mode: "todos", groupIds: [], employeeNames: [] };
+  const [editingId, setEditingId] = useState(undefined); // undefined = lista, null = nueva, id = editando
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [courseIds, setCourseIds] = useState([]);
+  const [assignment, setAssignment] = useState({ ...emptyAssignment });
+  const [addCourseId, setAddCourseId] = useState("");
+  const [assignSearch, setAssignSearch] = useState("");
+  const [isWelcomePath, setIsWelcomePath] = useState(false);
+
+  function startNew() {
+    setEditingId(null);
+    setTitle("");
+    setDescription("");
+    setCourseIds([]);
+    setAssignment({ ...emptyAssignment });
+    setAddCourseId("");
+    setIsWelcomePath(false);
+  }
+  function startEdit(p) {
+    setEditingId(p.id);
+    setTitle(p.title);
+    setDescription(p.description || "");
+    setCourseIds([...p.courseIds]);
+    setAssignment(p.assignment ? { ...p.assignment } : { ...emptyAssignment });
+    setAddCourseId("");
+    setIsWelcomePath(!!p.isWelcomePath);
+  }
+  function moveCourse(i, dir) {
+    setCourseIds((prev) => {
+      const arr = [...prev];
+      const target = i + dir;
+      if (target < 0 || target >= arr.length) return arr;
+      [arr[i], arr[target]] = [arr[target], arr[i]];
+      return arr;
+    });
+  }
+
+  if (editingId === undefined) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+        <button
+          onClick={startNew}
+          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content" }}
+        >
+          <Plus size={15} /> Nueva ruta
+        </button>
+        {paths.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay rutas de aprendizaje todavía.</div>}
+        {paths.map((p) => (
+          <div key={p.id} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "var(--sp-3)" }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{p.title}</div>
+                {p.isWelcomePath && (
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--success-soft)", color: "var(--success-text)" }}>
+                    Ruta de bienvenida
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{p.courseIds.length} {p.courseIds.length === 1 ? "formación" : "formaciones"}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <CopyLinkButton url={buildShareLink("path", p.id)} compact />
+              <button onClick={() => startEdit(p)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer" }}>Editar</button>
+              <button onClick={() => onDeletePath(p.id)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--danger)", border: "none", background: "none", cursor: "pointer" }}>Eliminar</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const availableCourses = courses.filter((c) => !courseIds.includes(c.id));
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)", maxWidth: 640 }}>
+      <button onClick={() => setEditingId(undefined)} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content" }}>
+        <ChevronLeft size={15} /> Rutas
+      </button>
+
+      <TextInput label="Título de la ruta" value={title} onChange={setTitle} placeholder="Ej. Ruta de bienvenida" />
+      <label className="block text-xs font-semibold text-gray-500 mb-1">
+        Descripción
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900" style={{ borderColor: "#00000020" }} />
+      </label>
+
+      <div>
+        <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)" }}>
+          Formaciones de la ruta, en el orden en que se desbloquean
+        </div>
+        <div className="flex gap-2 mb-3">
+          <select value={addCourseId} onChange={(e) => setAddCourseId(e.target.value)} className="flex-1 text-sm rounded-md border px-3 py-2" style={{ borderColor: "#00000020" }}>
+            <option value="">Selecciona una formación para añadir…</option>
+            {availableCourses.map((c) => (
+              <option key={c.id} value={c.id}>{c.title}</option>
+            ))}
+          </select>
+          <button
+            disabled={!addCourseId}
+            onClick={() => {
+              setCourseIds((prev) => [...prev, addCourseId]);
+              setAddCourseId("");
+            }}
+            style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--brand)", backgroundColor: "var(--bg-card)", border: "1px solid var(--border)", cursor: "pointer", opacity: !addCourseId ? 0.4 : 1 }}
+          >
+            Añadir
+          </button>
+        </div>
+        {courseIds.length === 0 ? (
+          <div className="text-xs text-gray-400">Añade al menos una formación.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {courseIds.map((cid, i) => {
+              const c = courses.find((cc) => cc.id === cid);
+              if (!c) return null;
+              return (
+                <div key={cid} style={{ ...DS.card, display: "flex", alignItems: "center", gap: 8, padding: "var(--sp-2) var(--sp-3)" }}>
+                  <span style={{ width: 20, height: 20, borderRadius: "var(--radius-full)", backgroundColor: "var(--brand)", color: "white", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                  <div style={{ flex: 1, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{c.title}</div>
+                  <button disabled={i === 0} onClick={() => moveCourse(i, -1)} className="text-gray-400 disabled:opacity-30"><ChevronUp size={15} /></button>
+                  <button disabled={i === courseIds.length - 1} onClick={() => moveCourse(i, 1)} className="text-gray-400 disabled:opacity-30"><ChevronDown size={15} /></button>
+                  <button onClick={() => setCourseIds((prev) => prev.filter((id) => id !== cid))} className="text-red-500"><X size={15} /></button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)" }}>Asignar ruta a</div>
+        <div className="flex gap-2 flex-wrap mb-2">
+          {[
+            { id: "todos", label: "Todos los empleados" },
+            { id: "grupos", label: "Grupos concretos" },
+            { id: "individual", label: "Personas concretas" },
+          ].map((m) => (
+            <button
+              key={m.id}
+              onClick={() => setAssignment((a) => ({ ...a, mode: m.id }))}
+              className="text-xs font-semibold px-3 py-1.5 rounded-full border"
+              style={{
+                backgroundColor: assignment.mode === m.id ? "var(--brand)" : "white",
+                color: assignment.mode === m.id ? "white" : "var(--text-primary)",
+                borderColor: assignment.mode === m.id ? "var(--brand)" : "#00000018",
+              }}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+        {assignment.mode === "grupos" && (
+          <div className="rounded-lg border p-3 space-y-1.5" style={{ borderColor: "#00000018" }}>
+            {groups.length === 0 ? (
+              <div className="text-xs text-gray-400">No hay grupos creados todavía.</div>
+            ) : (
+              groups.map((g) => (
+                <label key={g.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={(assignment.groupIds || []).includes(g.id)}
+                    onChange={() => {
+                      const has = (assignment.groupIds || []).includes(g.id);
+                      setAssignment((a) => ({ ...a, groupIds: has ? a.groupIds.filter((id) => id !== g.id) : [...(a.groupIds || []), g.id] }));
+                    }}
+                  />
+                  {g.name} <span className="text-[11px] text-gray-400">({(g.memberNames || []).length} personas)</span>
+                </label>
+              ))
+            )}
+          </div>
+        )}
+        {assignment.mode === "individual" && (
+          <div className="rounded-lg border p-3 space-y-1.5" style={{ borderColor: "#00000018" }}>
+            {employees.length > 8 && (
+              <input value={assignSearch} onChange={(e) => setAssignSearch(e.target.value)} placeholder="Buscar por nombre..." className="w-full text-xs rounded-md border px-2 py-1.5 mb-1.5" style={{ borderColor: "#00000020" }} />
+            )}
+            <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+              {employees
+                .filter((e) => e.name.toLowerCase().includes(assignSearch.trim().toLowerCase()))
+                .map((e) => (
+                  <label key={e.name} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={(assignment.employeeNames || []).includes(e.name)}
+                      onChange={() => {
+                        const has = (assignment.employeeNames || []).includes(e.name);
+                        setAssignment((a) => ({ ...a, employeeNames: has ? a.employeeNames.filter((n) => n !== e.name) : [...(a.employeeNames || []), e.name] }));
+                      }}
+                    />
+                    {e.name}
+                  </label>
+                ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {mode !== "team" && (
+        <div style={{ ...DS.card, padding: "var(--sp-3)", display: "flex", alignItems: "center", gap: 10 }}>
+          <input type="checkbox" checked={isWelcomePath} onChange={(e) => setIsWelcomePath(e.target.checked)} id="welcome-path-check" />
+          <label htmlFor="welcome-path-check" style={{ fontSize: "var(--text-sm)", cursor: "pointer" }}>
+            <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>Ruta de bienvenida</span>
+            <span style={{ color: "var(--text-muted)" }}> — se asigna sola a cada persona nueva que se dé de alta, además de a quien ya hayas asignado arriba.</span>
+          </label>
+        </div>
+      )}
+
+      <button
+        disabled={!title.trim() || courseIds.length === 0}
+        onClick={async () => {
+          await onSavePath({ id: editingId || uid(), title: title.trim(), description, courseIds, assignment, isWelcomePath });
+          setEditingId(undefined);
+        }}
+        style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: (!title.trim() || courseIds.length === 0) ? 0.4 : 1, width: "fit-content" }}
+      >
+        Guardar ruta
+      </button>
+    </div>
   );
 }
 
@@ -3293,9 +4322,14 @@ function AdminPanel({
   onDeleteGroup,
   onUpdateGroupMembers,
   onManualSetStatus,
-  onLoadSeedExamples,
   onExportBackup,
   onImportBackup,
+  onUpdateEmployeeManagedGroups,
+  paths,
+  onSavePath,
+  onDeletePath,
+  mode = "full",
+  restrictToGroupIds = [],
 }) {
   const [tab, setTab] = useState("courses");
   const emptyQuestion = { question: "", options: ["", "", "", ""], correct: 0 };
@@ -3324,6 +4358,7 @@ function AdminPanel({
   const [editingNameValue, setEditingNameValue] = useState("");
   const [renameError, setRenameError] = useState("");
   const [editingEmailValue, setEditingEmailValue] = useState("");
+  const [editingManagedGroupsFor, setEditingManagedGroupsFor] = useState(null);
   const [employeeSearch, setEmployeeSearch] = useState("");
   const [importPreviewRows, setImportPreviewRows] = useState(null);
   const [importFileError, setImportFileError] = useState("");
@@ -3344,8 +4379,6 @@ function AdminPanel({
   const [syncStatus, setSyncStatus] = useState("");
   const [manualCourseId, setManualCourseId] = useState("");
   const [manualEmployeeName, setManualEmployeeName] = useState("");
-  const [loadingExamples, setLoadingExamples] = useState(false);
-  const [examplesMsg, setExamplesMsg] = useState("");
 
   function resetDraft() {
     setDraft({
@@ -3366,6 +4399,7 @@ function AdminPanel({
       validityMonths: null,
     });
     setFileError("");
+    setPendingWarnings(null);
   }
   function loadDraft(course) {
     setDraft({
@@ -3375,9 +4409,10 @@ function AdminPanel({
       quiz: (course.quiz && course.quiz.length ? course.quiz : [{ ...emptyQuestion }]).map((q) => ({ ...q, options: [...q.options] })),
       attachments: course.attachments ? [...course.attachments] : [],
       assignment: course.assignment ? { ...course.assignment } : { ...emptyAssignment },
-      modules: course.modules ? course.modules.map((m) => ({ ...m, quiz: (m.quiz || []).map((q) => ({ ...q, options: [...q.options] })) })) : [],
+      modules: course.modules ? course.modules.map((m) => ({ ...m, quiz: (m.quiz || []).map((q) => ({ ...q, options: [...q.options] })), attachments: m.attachments ? [...m.attachments] : [] })) : [],
     });
     setFileError("");
+    setPendingWarnings(null);
     setTab("editor");
   }
   function setAssignmentMode(mode) {
@@ -3441,11 +4476,11 @@ function AdminPanel({
   function toggleModularMode() {
     setDraft((d) => {
       const turningOn = !(d.modules && d.modules.length > 0);
-      return { ...d, modules: turningOn ? [{ id: uid(), title: "Módulo 1", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }] }] : [] };
+      return { ...d, modules: turningOn ? [{ id: uid(), title: "Módulo 1", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [] }] : [] };
     });
   }
   function addModule() {
-    setDraft((d) => ({ ...d, modules: [...(d.modules || []), { id: uid(), title: `Módulo ${(d.modules || []).length + 1}`, body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }] }] }));
+    setDraft((d) => ({ ...d, modules: [...(d.modules || []), { id: uid(), title: `Módulo ${(d.modules || []).length + 1}`, body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [] }] }));
   }
   function removeModule(mi) {
     setDraft((d) => ({ ...d, modules: d.modules.filter((_, i) => i !== mi) }));
@@ -3461,6 +4496,37 @@ function AdminPanel({
   }
   function updateModuleField(mi, field, value) {
     setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, [field]: value } : m)) }));
+  }
+  function handleModuleFileInput(mi, e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      setFileError(`"${file.name}" pesa ${(file.size / 1024 / 1024).toFixed(1)} MB. El límite para adjuntar aquí dentro es de ~3,5 MB. Para archivos más grandes o vídeo, usa un enlace en el campo de vídeo del módulo.`);
+      e.target.value = "";
+      return;
+    }
+    setFileError("");
+    const reader = new FileReader();
+    reader.onload = () => {
+      setDraft((d) => ({
+        ...d,
+        modules: d.modules.map((m, i) =>
+          i === mi
+            ? { ...m, attachments: [...(m.attachments || []), { id: uid(), name: file.name, mimeType: file.type || "application/octet-stream", sizeKB: Math.round(file.size / 1024), data: reader.result }] }
+            : m
+        ),
+      }));
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+  function removeModuleAttachment(mi, attId) {
+    setDraft((d) => {
+      const mod = d.modules[mi];
+      const att = (mod.attachments || []).find((a) => a.id === attId);
+      if (att?.storageKey) deleteKey(att.storageKey);
+      return { ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, attachments: (m.attachments || []).filter((a) => a.id !== attId) } : m)) };
+    });
   }
   function addModuleQuestion(mi) {
     setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, quiz: [...m.quiz, { ...emptyQuestion }] } : m)) }));
@@ -3485,6 +4551,45 @@ function AdminPanel({
   function canSave() {
     return draft.title.trim().length > 0;
   }
+  // Avisa (sin bloquear) de problemas de contenido que antes pasaban
+  // desapercibidos hasta que un empleado abría la formación y se encontraba
+  // un test roto: preguntas sin texto, sin suficientes opciones, con la
+  // respuesta correcta señalando a una opción vacía, o un Google Form sin
+  // enlace.
+  function getContentWarnings() {
+    const warnings = [];
+    function checkQuiz(quiz, context) {
+      quiz.forEach((q, qi) => {
+        if (!q.question.trim()) warnings.push(`${context}: la pregunta ${qi + 1} no tiene texto.`);
+        const filled = q.options.filter((o) => o.trim().length > 0);
+        if (filled.length < 2) warnings.push(`${context}: la pregunta ${qi + 1} tiene menos de 2 opciones rellenadas.`);
+        else if (!q.options[q.correct] || !q.options[q.correct].trim()) warnings.push(`${context}: la pregunta ${qi + 1} marca como correcta una opción vacía.`);
+      });
+    }
+    const hasModules = draft.modules && draft.modules.length > 0;
+    if (!hasModules) {
+      if (draft.testMode === "interno") {
+        checkQuiz(draft.quiz || [], "Test principal");
+      } else if (draft.testMode === "googleform" && !(draft.googleFormUrl || "").trim()) {
+        warnings.push("Has elegido \"Google Form\" pero no has puesto ningún enlace de formulario.");
+      }
+    } else {
+      (draft.modules || []).forEach((mod, mi) => {
+        const label = `Módulo ${mi + 1}${mod.title ? ` ("${mod.title}")` : ""}`;
+        if (!mod.title || !mod.title.trim()) warnings.push(`Módulo ${mi + 1}: no tiene título.`);
+        if ((mod.quiz || []).length > 0) checkQuiz(mod.quiz, label);
+      });
+    }
+    return warnings;
+  }
+  const [pendingWarnings, setPendingWarnings] = useState(null);
+  const [courseListSearch, setCourseListSearch] = useState("");
+  const [courseListCategoryFilter, setCourseListCategoryFilter] = useState("");
+  function handleSaveClick() {
+    const warnings = getContentWarnings();
+    if (warnings.length > 0) setPendingWarnings(warnings);
+    else handleSave();
+  }
   async function handleSave() {
     setSaving(true);
     const finalAttachments = [];
@@ -3497,7 +4602,23 @@ function AdminPanel({
       await saveKey(storageKey, { name: att.name, mimeType: att.mimeType, data: att.data });
       finalAttachments.push({ id: att.id, name: att.name, mimeType: att.mimeType, sizeKB: att.sizeKB, storageKey });
     }
-    await onSaveCourse({ ...draft, id: draft.id || uid(), attachments: finalAttachments });
+    // Los adjuntos de cada módulo se suben igual que los de la formación —
+    // cada módulo puede llevar los suyos propios, aparte.
+    const finalModules = [];
+    for (const mod of draft.modules || []) {
+      const modAttachments = [];
+      for (const att of mod.attachments || []) {
+        if (att.storageKey) {
+          modAttachments.push({ id: att.id, name: att.name, mimeType: att.mimeType, sizeKB: att.sizeKB, storageKey: att.storageKey });
+          continue;
+        }
+        const storageKey = `mb_att_${att.id}`;
+        await saveKey(storageKey, { name: att.name, mimeType: att.mimeType, data: att.data });
+        modAttachments.push({ id: att.id, name: att.name, mimeType: att.mimeType, sizeKB: att.sizeKB, storageKey });
+      }
+      finalModules.push({ ...mod, attachments: modAttachments });
+    }
+    await onSaveCourse({ ...draft, id: draft.id || uid(), attachments: finalAttachments, modules: finalModules });
     setSaving(false);
     resetDraft();
     setTab("courses");
@@ -3527,6 +4648,22 @@ function AdminPanel({
     return result;
   }, [completionsByCourse, courses]);
 
+  // Cumplimiento por ruta de aprendizaje: de toda la gente a la que le toca una
+  // ruta, cuántos la han terminado ENTERA (todas sus formaciones completadas).
+  // No usa getStatus (que vive en el componente principal) — comprueba el
+  // estado guardado directamente, que es suficiente para este resumen.
+  const pathCompletionSummary = useMemo(() => {
+    return paths.map((p) => {
+      const assignedEmployees = employees.filter((e) => isAssignedToUser(p, e.name, groups));
+      let doneCount = 0;
+      for (const emp of assignedEmployees) {
+        const allDone = p.courseIds.every((cid) => completionsByCourse[cid]?.[emp.name]?.status === "completada");
+        if (allDone) doneCount++;
+      }
+      return { id: p.id, title: p.title, assignedCount: assignedEmployees.length, doneCount };
+    });
+  }, [paths, employees, groups, completionsByCourse]);
+
   const pendingReportRows = useMemo(() => {
     const rows = [];
     for (const emp of employees) {
@@ -3550,43 +4687,140 @@ function AdminPanel({
     return rows;
   }, [employees, courses, groups, completionsByCourse]);
 
+  // Modo "equipo" (responsables): solo la gente de los grupos que gestionan.
+  const teamMemberNames = useMemo(() => {
+    if (mode !== "team") return null;
+    const names = new Set();
+    for (const g of groups) {
+      if (restrictToGroupIds.includes(g.id)) {
+        for (const n of g.memberNames || []) names.add(n);
+      }
+    }
+    return names;
+  }, [mode, groups, restrictToGroupIds]);
+
+  const teamEmployees = useMemo(() => {
+    if (!teamMemberNames) return [];
+    return employees.filter((e) => teamMemberNames.has(e.name));
+  }, [employees, teamMemberNames]);
+
+  const teamCompletionRows = useMemo(() => {
+    if (!teamMemberNames) return [];
+    return completionRows.filter((r) => teamMemberNames.has(r.employee));
+  }, [completionRows, teamMemberNames]);
+
+  const [teamNewMemberName, setTeamNewMemberName] = useState("");
+
+  const TAB_GROUPS = [
+    { id: "content", label: "Contenido", icon: LayoutGrid, tabs: ["courses", "editor", "paths", "news"] },
+    { id: "people", label: "Personas", icon: Users, tabs: ["employees", "groups"] },
+    { id: "tracking", label: "Seguimiento", icon: ClipboardList, tabs: ["seguimiento", "reviews"] },
+    { id: "system", label: "Sistema", icon: Settings, tabs: ["notificaciones", "backup"] },
+  ];
+  const TAB_LABELS = {
+    courses: "Formaciones",
+    editor: draft.id ? "Editar formación" : "Nueva formación",
+    paths: "Rutas",
+    news: "Novedades",
+    employees: "Empleados",
+    groups: "Grupos",
+    seguimiento: "Seguimiento",
+    reviews: "Reseñas",
+    notificaciones: "Notificaciones",
+    backup: "Copia de seguridad",
+  };
+  const activeGroup = TAB_GROUPS.find((g) => g.tabs.includes(tab)) || TAB_GROUPS[0];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
       <div>
-        <h1 style={{ fontSize: "var(--text-xl)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-4) 0" }}>Administración</h1>
-        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
-          {[
-            { id: "courses", label: "Formaciones" },
-            { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
-            { id: "news", label: "Novedades" },
-            { id: "employees", label: "Empleados" },
-            { id: "groups", label: "Grupos" },
-            { id: "seguimiento", label: "Seguimiento" },
-            { id: "notificaciones", label: "Notificaciones" },
-            { id: "backup", label: "Copia de seguridad" },
-          ].map((t) => {
-            const active = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => {
-                  if (t.id === "editor" && !draft.title && tab !== "editor") resetDraft();
-                  setTab(t.id);
-                }}
-                style={{
-                  fontSize: "var(--text-sm)", fontWeight: active ? 600 : 500,
-                  padding: "10px 14px", whiteSpace: "nowrap", flexShrink: 0,
-                  color: active ? "var(--brand)" : "var(--text-muted)",
-                  background: "none", border: "none", cursor: "pointer",
-                  borderBottom: active ? "2px solid var(--brand)" : "2px solid transparent",
-                  marginBottom: -1, transition: "color var(--dur-fast) var(--ease-out)",
-                }}
-              >
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
+        <h1 style={{ fontSize: "var(--text-xl)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-4) 0" }}>
+          {mode === "team" ? "Mi equipo" : "Administración"}
+        </h1>
+
+        {mode === "team" ? (
+          <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
+            {[
+              { id: "courses", label: "Formaciones" },
+              { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
+              { id: "paths", label: "Rutas" },
+              { id: "team", label: "Mi equipo" },
+            ].map((t) => {
+              const active = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => {
+                    if (t.id === "editor" && !draft.title && tab !== "editor") resetDraft();
+                    setTab(t.id);
+                  }}
+                  style={{
+                    fontSize: "var(--text-sm)", fontWeight: active ? 600 : 500,
+                    padding: "10px 14px", whiteSpace: "nowrap", flexShrink: 0,
+                    color: active ? "var(--brand)" : "var(--text-muted)",
+                    background: "none", border: "none", cursor: "pointer",
+                    borderBottom: active ? "2px solid var(--brand)" : "2px solid transparent",
+                    marginBottom: -1, transition: "color var(--dur-fast) var(--ease-out)",
+                  }}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <>
+            {/* Nivel 1: categorías — nunca crece, aunque añadamos más pestañas dentro de cada una */}
+            <div style={{ display: "flex", gap: 4, marginBottom: "var(--sp-2)", flexWrap: "wrap" }}>
+              {TAB_GROUPS.map((g) => {
+                const isActiveGroup = g.id === activeGroup.id;
+                return (
+                  <button
+                    key={g.id}
+                    onClick={() => {
+                      if (!g.tabs.includes(tab)) setTab(g.tabs[0]);
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      fontSize: "var(--text-sm)", fontWeight: isActiveGroup ? 600 : 500,
+                      padding: "7px 12px", borderRadius: "var(--radius-md)",
+                      color: isActiveGroup ? "var(--brand)" : "var(--text-secondary)",
+                      backgroundColor: isActiveGroup ? "var(--brand-soft)" : "transparent",
+                      border: "none", cursor: "pointer",
+                    }}
+                  >
+                    <g.icon size={14} /> {g.label}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Nivel 2: pestañas concretas dentro de la categoría elegida */}
+            <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
+              {activeGroup.tabs.map((tabId) => {
+                const active = tab === tabId;
+                return (
+                  <button
+                    key={tabId}
+                    onClick={() => {
+                      if (tabId === "editor" && !draft.title && tab !== "editor") resetDraft();
+                      setTab(tabId);
+                    }}
+                    style={{
+                      fontSize: "var(--text-sm)", fontWeight: active ? 600 : 500,
+                      padding: "10px 14px", whiteSpace: "nowrap", flexShrink: 0,
+                      color: active ? "var(--brand)" : "var(--text-muted)",
+                      background: "none", border: "none", cursor: "pointer",
+                      borderBottom: active ? "2px solid var(--brand)" : "2px solid transparent",
+                      marginBottom: -1, transition: "color var(--dur-fast) var(--ease-out)",
+                    }}
+                  >
+                    {TAB_LABELS[tabId]}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
       {tab === "courses" && (
@@ -3601,24 +4835,41 @@ function AdminPanel({
             >
               <Plus size={15} /> Nueva formación
             </button>
-            <button
-              disabled={loadingExamples}
-              onClick={async () => {
-                setLoadingExamples(true);
-                const added = await onLoadSeedExamples();
-                setLoadingExamples(false);
-                setExamplesMsg(`Ejemplos actualizados (${added} formaciones/novedades). Si tenías progreso guardado en las versiones antiguas, se ha reiniciado.`);
-                setTimeout(() => setExamplesMsg(""), 6000);
-              }}
-              style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 500, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--brand)", backgroundColor: "var(--bg-card)", border: "1px solid var(--border)", cursor: "pointer", opacity: loadingExamples ? 0.5 : 1 }}
-            >
-              {loadingExamples && <Loader2 size={14} className="animate-spin" />}
-              Cargar / actualizar ejemplos
-            </button>
-            {examplesMsg && <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{examplesMsg}</span>}
           </div>
+          {courses.length > 4 && (
+            <div style={{ display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", marginBottom: "var(--sp-2)" }}>
+              <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+                <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+                <input
+                  value={courseListSearch}
+                  onChange={(e) => setCourseListSearch(e.target.value)}
+                  placeholder="Buscar por título..."
+                  style={{ width: "100%", padding: "7px 10px 7px 32px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)" }}
+                />
+              </div>
+              <select
+                value={courseListCategoryFilter}
+                onChange={(e) => setCourseListCategoryFilter(e.target.value)}
+                style={{ padding: "7px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)", color: "var(--text-primary)" }}
+              >
+                <option value="">Todos los campos</option>
+                {CATEGORIES.map((cat) => (
+                  <option key={cat.id} value={cat.id}>{cat.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {courses.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay formaciones todavía.</div>}
-          {courses.map((c) => (
+          {(() => {
+            const filtered = courses.filter(
+              (c) =>
+                (!courseListCategoryFilter || c.category === courseListCategoryFilter) &&
+                (!courseListSearch.trim() || c.title.toLowerCase().includes(courseListSearch.trim().toLowerCase()))
+            );
+            if (courses.length > 0 && filtered.length === 0) {
+              return <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Ninguna formación coincide con la búsqueda.</div>;
+            }
+            return filtered.map((c) => (
             <div key={c.id} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "var(--sp-3)", flexWrap: "wrap" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
                 <CategoryTag id={c.category} small />
@@ -3630,6 +4881,9 @@ function AdminPanel({
                 )}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                <div style={{ marginRight: 8 }}>
+                  <CopyLinkButton url={buildShareLink("course", c.id)} compact />
+                </div>
                 <button onClick={() => loadDraft(c)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--info)", background: "none", border: "none", cursor: "pointer" }}>
                   Editar
                 </button>
@@ -3638,7 +4892,8 @@ function AdminPanel({
                 </button>
               </div>
             </div>
-          ))}
+            ));
+          })()}
         </div>
       )}
 
@@ -3682,6 +4937,36 @@ function AdminPanel({
               <span style={{ position: "absolute", top: 2, left: draft.modules && draft.modules.length > 0 ? 22 : 2, width: 20, height: 20, borderRadius: "50%", backgroundColor: "white", transition: "left 0.2s" }} />
             </button>
           </div>
+
+          <div className="flex gap-4 flex-wrap">
+            <div className="w-40">
+              <TextInput label="Fecha límite" type="date" value={draft.deadline} onChange={(v) => setDraft((d) => ({ ...d, deadline: v }))} />
+            </div>
+            {(!draft.modules || draft.modules.length === 0) && draft.testMode !== "googleform" && (
+              <div className="w-40">
+                <TextInput label="% para aprobar el test" type="number" value={draft.passPct} onChange={(v) => setDraft((d) => ({ ...d, passPct: Number(v) }))} />
+              </div>
+            )}
+            <div className="w-48">
+              <label className="block text-xs font-semibold text-gray-500 mb-1">
+                Caduca cada (meses, opcional)
+                <input
+                  type="number"
+                  min="0"
+                  value={draft.validityMonths || ""}
+                  onChange={(e) => setDraft((d) => ({ ...d, validityMonths: e.target.value ? Number(e.target.value) : null }))}
+                  placeholder="Ej. 12 — vacío = no caduca"
+                  className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900"
+                  style={{ borderColor: "#00000020" }}
+                />
+              </label>
+            </div>
+          </div>
+          {draft.validityMonths > 0 && (
+            <div className="text-[11px] text-gray-400 -mt-2">
+              Pasados {draft.validityMonths} mes{draft.validityMonths === 1 ? "" : "es"} desde que alguien la complete, le volverá a aparecer como pendiente automáticamente (recertificación).
+            </div>
+          )}
 
           {draft.modules && draft.modules.length > 0 ? (
             <div className="space-y-3">
@@ -3728,55 +5013,86 @@ function AdminPanel({
                     style={{ borderColor: "#00000018" }}
                   />
 
-                  <div className="flex items-center justify-between pt-1">
-                    <div className="text-xs font-semibold text-gray-500">Test de este módulo</div>
-                    <div className="flex items-center gap-2">
-                      <label className="text-[11px] text-gray-400 flex items-center gap-1">
-                        % para aprobar
-                        <input
-                          type="number"
-                          value={mod.passPct}
-                          onChange={(e) => updateModuleField(mi, "passPct", Number(e.target.value))}
-                          className="w-14 text-xs rounded-md border px-1.5 py-1"
-                          style={{ borderColor: "#00000018" }}
-                        />
-                      </label>
-                      <button onClick={() => addModuleQuestion(mi)} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
-                        <Plus size={12} /> Pregunta
-                      </button>
-                    </div>
+                  <div>
+                    <div className="text-[11px] font-semibold text-gray-500 mb-1">Documentos de este módulo (PDF, Word...)</div>
+                    {(mod.attachments || []).map((att) => (
+                      <div key={att.id} className="flex items-center justify-between gap-2 rounded-md px-2 py-1 mb-1" style={{ backgroundColor: "var(--bg-inset)" }}>
+                        <span className="text-xs truncate" style={{ color: "var(--text-primary)" }}>{att.name} <span className="text-[10px] text-gray-400">({att.sizeKB} KB)</span></span>
+                        <button onClick={() => removeModuleAttachment(mi, att.id)} className="text-red-500 flex-shrink-0"><X size={13} /></button>
+                      </div>
+                    ))}
+                    <input type="file" onChange={(e) => handleModuleFileInput(mi, e)} className="text-xs" accept=".pdf,.doc,.docx" />
                   </div>
 
-                  {mod.quiz.map((q, qi) => (
-                    <div key={qi} className="rounded-md p-2 space-y-1.5" style={{ backgroundColor: "var(--bg-inset)" }}>
-                      <div className="flex items-center gap-2">
-                        <input
-                          value={q.question}
-                          onChange={(e) => updateModuleQuestion(mi, qi, "question", e.target.value)}
-                          placeholder={`Pregunta ${qi + 1}`}
-                          className="flex-1 text-xs rounded-md border px-2 py-1"
-                          style={{ borderColor: "#00000018" }}
-                        />
-                        {mod.quiz.length > 1 && (
-                          <button onClick={() => removeModuleQuestion(mi, qi)} className="text-red-500">
-                            <X size={14} />
-                          </button>
-                        )}
-                      </div>
-                      {q.options.map((opt, oi) => (
-                        <div key={oi} className="flex items-center gap-2">
-                          <input type="radio" checked={q.correct === oi} onChange={() => updateModuleQuestion(mi, qi, "correct", oi)} className="flex-shrink-0" />
+                  <div className="flex items-center justify-between pt-1">
+                    <div className="text-xs font-semibold text-gray-500">Test de este módulo</div>
+                    <button
+                      onClick={() => updateModuleField(mi, "quiz", mod.quiz.length > 0 ? [] : [{ ...emptyQuestion }])}
+                      className="text-[11px] font-semibold px-2.5 py-1 rounded-full border"
+                      style={{
+                        backgroundColor: mod.quiz.length === 0 ? BRAND.red : "white",
+                        color: mod.quiz.length === 0 ? "white" : BRAND.ink,
+                        borderColor: mod.quiz.length === 0 ? BRAND.red : "#00000018",
+                      }}
+                    >
+                      {mod.quiz.length === 0 ? "Sin test ✓" : "Sin test"}
+                    </button>
+                  </div>
+
+                  {mod.quiz.length === 0 ? (
+                    <div className="text-[11px] text-gray-400 rounded-md p-2" style={{ backgroundColor: "var(--bg-inset)" }}>
+                      Este módulo no tiene test — la persona verá el contenido y pulsará "Continuar" para pasar al siguiente módulo, sin preguntas de por medio.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-end gap-2">
+                        <label className="text-[11px] text-gray-400 flex items-center gap-1">
+                          % para aprobar
                           <input
-                            value={opt}
-                            onChange={(e) => updateModuleOption(mi, qi, oi, e.target.value)}
-                            placeholder={`Opción ${oi + 1}`}
-                            className="flex-1 text-xs rounded-md border px-2 py-1"
-                            style={{ borderColor: "#00000015" }}
+                            type="number"
+                            value={mod.passPct}
+                            onChange={(e) => updateModuleField(mi, "passPct", Number(e.target.value))}
+                            className="w-14 text-xs rounded-md border px-1.5 py-1"
+                            style={{ borderColor: "#00000018" }}
                           />
+                        </label>
+                        <button onClick={() => addModuleQuestion(mi)} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
+                          <Plus size={12} /> Pregunta
+                        </button>
+                      </div>
+
+                      {mod.quiz.map((q, qi) => (
+                        <div key={qi} className="rounded-md p-2 space-y-1.5" style={{ backgroundColor: "var(--bg-inset)" }}>
+                          <div className="flex items-center gap-2">
+                            <input
+                              value={q.question}
+                              onChange={(e) => updateModuleQuestion(mi, qi, "question", e.target.value)}
+                              placeholder={`Pregunta ${qi + 1}`}
+                              className="flex-1 text-xs rounded-md border px-2 py-1"
+                              style={{ borderColor: "#00000018" }}
+                            />
+                            {mod.quiz.length > 1 && (
+                              <button onClick={() => removeModuleQuestion(mi, qi)} className="text-red-500">
+                                <X size={14} />
+                              </button>
+                            )}
+                          </div>
+                          {q.options.map((opt, oi) => (
+                            <div key={oi} className="flex items-center gap-2">
+                              <input type="radio" checked={q.correct === oi} onChange={() => updateModuleQuestion(mi, qi, "correct", oi)} className="flex-shrink-0" />
+                              <input
+                                value={opt}
+                                onChange={(e) => updateModuleOption(mi, qi, oi, e.target.value)}
+                                placeholder={`Opción ${oi + 1}`}
+                                className="flex-1 text-xs rounded-md border px-2 py-1"
+                                style={{ borderColor: "#00000015" }}
+                              />
+                            </div>
+                          ))}
                         </div>
                       ))}
-                    </div>
-                  ))}
+                    </>
+                  )}
                 </div>
               ))}
               <button onClick={addModule} className="text-sm font-semibold flex items-center gap-1.5" style={{ color: BRAND.red }}>
@@ -3788,36 +5104,6 @@ function AdminPanel({
               <TextInput label="URL del vídeo (YouTube o Vimeo)" value={draft.videoUrl} onChange={(v) => setDraft((d) => ({ ...d, videoUrl: v }))} placeholder="https://www.youtube.com/watch?v=..." />
               <TextInput label="URL de la presentación (link embebible)" value={draft.presentationUrl} onChange={(v) => setDraft((d) => ({ ...d, presentationUrl: v }))} placeholder="https://..." />
 
-              <div className="flex gap-4 flex-wrap">
-                <div className="w-40">
-                  <TextInput label="Fecha límite" type="date" value={draft.deadline} onChange={(v) => setDraft((d) => ({ ...d, deadline: v }))} />
-                </div>
-                {draft.testMode !== "googleform" && (
-                  <div className="w-40">
-                    <TextInput label="% para aprobar el test" type="number" value={draft.passPct} onChange={(v) => setDraft((d) => ({ ...d, passPct: Number(v) }))} />
-                  </div>
-                )}
-                <div className="w-48">
-                  <label className="block text-xs font-semibold text-gray-500 mb-1">
-                    Caduca cada (meses, opcional)
-                    <input
-                      type="number"
-                      min="0"
-                      value={draft.validityMonths || ""}
-                      onChange={(e) => setDraft((d) => ({ ...d, validityMonths: e.target.value ? Number(e.target.value) : null }))}
-                      placeholder="Ej. 12 — vacío = no caduca"
-                      className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900"
-                      style={{ borderColor: "#00000020" }}
-                    />
-                  </label>
-                </div>
-              </div>
-              {draft.validityMonths > 0 && (
-                <div className="text-[11px] text-gray-400 -mt-2">
-                  Pasados {draft.validityMonths} mes{draft.validityMonths === 1 ? "" : "es"} desde que alguien la complete, le volverá a aparecer como pendiente automáticamente (recertificación).
-                </div>
-              )}
-
           <div>
 
             <div className="text-xs font-semibold text-gray-500 mb-2">Cómo se hace el test</div>
@@ -3825,6 +5111,7 @@ function AdminPanel({
               {[
                 { id: "interno", label: "Preguntas dentro de la app" },
                 { id: "googleform", label: "Google Form (externo)" },
+                { id: "ninguno", label: "Sin test" },
               ].map((m) => (
                 <button
                   key={m.id}
@@ -3841,6 +5128,12 @@ function AdminPanel({
               ))}
             </div>
 
+            {draft.testMode === "ninguno" && (
+              <div className="text-[11px] text-gray-400 rounded-lg border p-3" style={{ borderColor: "#00000018" }}>
+                Sin test: la persona verá el vídeo y/o los documentos, y marcará "Ya la he visto" ella misma para darla por completada — igual que con un Google Form, pero sin ningún formulario externo de por medio.
+              </div>
+            )}
+
             {draft.testMode === "googleform" ? (
               <div className="rounded-lg border p-3" style={{ borderColor: "#00000018" }}>
                 <TextInput
@@ -3853,7 +5146,7 @@ function AdminPanel({
                   El formulario es totalmente tuyo — créalo, edítalo y cámbialo cuando quieras directamente en Google Forms, sin tocar esta app. La app solo lo muestra embebido y deja que la persona marque "completado" al terminar; no puede leer las respuestas ni corregirlo automáticamente. Si necesitas saber quién acertó qué, revisa las respuestas del propio Form (o su Hoja de cálculo vinculada), y usa "Marcar manualmente" en Seguimiento si quieres reflejarlo en la app.
                 </div>
               </div>
-            ) : (
+            ) : draft.testMode === "interno" ? (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs font-semibold text-gray-500">Preguntas del test</div>
@@ -3885,7 +5178,7 @@ function AdminPanel({
                   ))}
                 </div>
               </div>
-            )}
+            ) : null}
           </div>
             </>
           )}
@@ -3982,8 +5275,43 @@ function AdminPanel({
             )}
           </div>
 
+          {pendingWarnings && (
+            <div style={{ ...DS.card, padding: "var(--sp-4)", borderLeft: "4px solid var(--warning)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "var(--sp-2)" }}>
+                <AlertTriangle size={16} style={{ color: "var(--warning)" }} />
+                <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>
+                  Antes de guardar, revisa esto
+                </div>
+              </div>
+              <ul style={{ margin: "0 0 var(--sp-3) 0", paddingLeft: 20, fontSize: "var(--text-xs)", color: "var(--text-secondary)", lineHeight: 1.7 }}>
+                {pendingWarnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPendingWarnings(null)}
+                  className="text-xs font-semibold rounded-md px-3 py-1.5 border"
+                  style={{ borderColor: "#00000018", color: BRAND.ink }}
+                >
+                  Volver a revisarlo
+                </button>
+                <button
+                  onClick={() => {
+                    setPendingWarnings(null);
+                    handleSave();
+                  }}
+                  className="text-xs font-semibold rounded-md px-3 py-1.5 text-white"
+                  style={{ backgroundColor: "var(--warning)" }}
+                >
+                  Guardar de todas formas
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-2">
-            <button disabled={!canSave() || saving} onClick={handleSave} className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 transition-all duration-150 active:scale-[0.98]" style={{ backgroundColor: BRAND.red }}>
+            <button disabled={!canSave() || saving} onClick={handleSaveClick} className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 transition-all duration-150 active:scale-[0.98]" style={{ backgroundColor: BRAND.red }}>
               {saving ? "Guardando..." : "Guardar formación"}
             </button>
             <button
@@ -4000,7 +5328,11 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "news" && (
+      {tab === "paths" && (
+        <PathsAdminTab paths={paths} courses={courses} groups={groups} employees={employees} onSavePath={onSavePath} onDeletePath={onDeletePath} mode={mode} />
+      )}
+
+      {tab === "news" && mode !== "team" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 space-y-3 shadow-sm" style={{ borderColor: "#00000012" }}>
             {editingNewsId && (
@@ -4144,7 +5476,7 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "employees" && (
+      {tab === "employees" && mode !== "team" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 flex items-end gap-2 flex-wrap shadow-sm" style={{ borderColor: "#00000012" }}>
             <div className="flex-1 min-w-[160px]">
@@ -4385,8 +5717,22 @@ function AdminPanel({
                       )}
                     </div>
                     {!e.passwordHash && <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5 flex-shrink-0">Sin contraseña todavía</span>}
+                    {mode !== "team" && (e.managedGroupIds || []).length > 0 && (
+                      <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 flex-shrink-0" style={{ backgroundColor: "var(--brand-soft)", color: "var(--brand)" }}>
+                        Responsable de {e.managedGroupIds.length} equipo{e.managedGroupIds.length === 1 ? "" : "s"}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
+                    {mode !== "team" && (
+                      <button
+                        onClick={() => setEditingManagedGroupsFor(editingManagedGroupsFor === e.name ? null : e.name)}
+                        className="text-xs font-semibold"
+                        style={{ color: BRAND.blue }}
+                      >
+                        Responsable de…
+                      </button>
+                    )}
                     {e.passwordHash && (
                       <button
                         onClick={() => onResetEmployeePassword(e.name)}
@@ -4401,13 +5747,40 @@ function AdminPanel({
                       <Trash2 size={14} />
                     </button>
                   </div>
+                  {editingManagedGroupsFor === e.name && (
+                    <div style={{ ...DS.card, padding: "var(--sp-3)", width: "100%", marginTop: "var(--sp-2)" }}>
+                      <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-2)" }}>
+                        Hacer a {e.name} responsable de estos equipos (verá "Mi equipo" al entrar, y podrá subir formaciones para cualquier equipo):
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {groups.length === 0 && <div className="text-xs text-gray-400">Crea grupos primero, en la pestaña Grupos.</div>}
+                        {groups.map((g) => {
+                          const checked = (e.managedGroupIds || []).includes(g.id);
+                          return (
+                            <label key={g.id} className="flex items-center gap-1.5 text-xs" style={{ cursor: "pointer" }}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  const current = e.managedGroupIds || [];
+                                  const next = checked ? current.filter((id) => id !== g.id) : [...current, g.id];
+                                  onUpdateEmployeeManagedGroups(e.name, next);
+                                }}
+                              />
+                              {g.name}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
           </div>
         </div>
       )}
 
-      {tab === "groups" && (
+      {tab === "groups" && mode !== "team" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 flex items-end gap-2 flex-wrap shadow-sm" style={{ borderColor: "#00000012" }}>
             <div className="flex-1 min-w-[200px]">
@@ -4482,7 +5855,7 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "seguimiento" && (
+      {tab === "seguimiento" && mode !== "team" && (
         <div className="space-y-3">
           <button
             onClick={onLoadTracking}
@@ -4544,6 +5917,31 @@ function AdminPanel({
             </div>
           </div>
 
+          {paths.length > 0 && (
+            <div>
+              <div className="font-bold text-sm mb-2" style={{ color: "var(--text-primary)" }}>Cumplimiento por ruta de aprendizaje</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--sp-3)", marginBottom: "var(--sp-4)" }}>
+                {pathCompletionSummary.map((p) => {
+                  const percent = p.assignedCount > 0 ? Math.round((p.doneCount / p.assignedCount) * 100) : 0;
+                  return (
+                    <div key={p.id} style={{ ...DS.card, padding: "var(--sp-3)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                        <Map size={13} style={{ color: "var(--info)" }} />
+                        <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{p.title}</div>
+                      </div>
+                      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: 6 }}>
+                        {p.doneCount}/{p.assignedCount} personas completada la ruta entera
+                      </div>
+                      <div style={{ height: 6, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${percent}%`, backgroundColor: percent === 100 ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)" }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="rounded-xl border bg-white overflow-hidden shadow-sm" style={{ borderColor: "#00000012" }}>
             <table className="w-full text-sm">
               <thead>
@@ -4586,7 +5984,167 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "notificaciones" && (
+      {tab === "team" && mode === "team" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
+          <div>
+            <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-2)" }}>
+              Miembros de tu equipo ({teamEmployees.length})
+            </div>
+            <div style={{ display: "flex", gap: "var(--sp-2)", marginBottom: "var(--sp-3)", flexWrap: "wrap" }}>
+              <input
+                value={teamNewMemberName}
+                onChange={(e) => setTeamNewMemberName(e.target.value)}
+                placeholder="Nombre de la persona a añadir a tu equipo"
+                className="text-sm rounded-md border px-3 py-2"
+                style={{ borderColor: "#00000020", minWidth: 260 }}
+              />
+              <button
+                disabled={!teamNewMemberName.trim()}
+                onClick={() => {
+                  const name = teamNewMemberName.trim();
+                  const exists = employees.some((e) => e.name.trim().toLowerCase() === name.toLowerCase());
+                  if (!exists) {
+                    onAddEmployee(name, "");
+                  }
+                  for (const gid of restrictToGroupIds) {
+                    const g = groups.find((gr) => gr.id === gid);
+                    if (g && !g.memberNames.includes(name)) {
+                      onUpdateGroupMembers(gid, [...g.memberNames, name]);
+                    }
+                  }
+                  setTeamNewMemberName("");
+                }}
+                style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !teamNewMemberName.trim() ? 0.4 : 1 }}
+              >
+                Añadir a mi equipo
+              </button>
+            </div>
+            <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: "var(--sp-3)" }}>
+              Si la persona ya existe en la aplicación, se añade a tu equipo. Si es nueva, se crea sin contraseña — la creará ella misma en su primer acceso.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+              {teamEmployees.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Todavía no tienes a nadie en tu equipo.</div>}
+              {teamEmployees.map((e) => (
+                <div key={e.name} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "var(--sp-2) var(--sp-3)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Avatar name={e.name} size={26} />
+                    <div>
+                      <div style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{e.name}</div>
+                      <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{e.email || "Sin email"}</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      for (const gid of restrictToGroupIds) {
+                        const g = groups.find((gr) => gr.id === gid);
+                        if (g) onUpdateGroupMembers(gid, g.memberNames.filter((n) => n !== e.name));
+                      }
+                    }}
+                    style={{ fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--danger)", border: "none", background: "none", cursor: "pointer" }}
+                  >
+                    Quitar de mi equipo
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-3)" }}>
+              Cumplimiento de tu equipo
+            </div>
+            {teamCompletionRows.length === 0 ? (
+              <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Todavía no hay progreso registrado en tu equipo.</div>
+            ) : (
+              <div style={{ ...DS.card, overflow: "auto" }}>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border)" }}>
+                      <th className="px-3 py-2">Persona</th>
+                      <th className="px-3 py-2">Formación</th>
+                      <th className="px-3 py-2">Estado</th>
+                      <th className="px-3 py-2">Nota</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {teamCompletionRows.map((r, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                        <td className="px-3 py-2">{r.employee}</td>
+                        <td className="px-3 py-2">{r.courseTitle}</td>
+                        <td className="px-3 py-2">
+                          {r.status === "completada" ? (
+                            <span style={{ color: "var(--success)", fontWeight: 600 }}>Completada</span>
+                          ) : (
+                            <span style={{ color: "var(--warning)", fontWeight: 600 }}>En progreso</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">{r.score != null ? `${r.score}%` : "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab === "reviews" && mode !== "team" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
+          <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+            Valoraciones y comentarios que ha dejado cada persona al completar una formación.
+          </div>
+          {courses.filter((c) => avgRatingByCourse[c.id]).length === 0 ? (
+            <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Todavía no hay ninguna valoración registrada.</div>
+          ) : (
+            courses
+              .filter((c) => avgRatingByCourse[c.id])
+              .map((c) => {
+                const entries = Object.entries(completionsByCourse[c.id] || {}).filter(([, r]) => typeof r.rating === "number" && r.rating > 0);
+                return (
+                  <div key={c.id} style={{ ...DS.card, padding: "var(--sp-4)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: "var(--sp-3)", flexWrap: "wrap" }}>
+                      <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{c.title}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--warning)" }}>
+                        <Star size={14} fill="var(--warning)" /> {avgRatingByCourse[c.id].avg.toFixed(1)}
+                        <span style={{ fontSize: "var(--text-xs)", fontWeight: 400, color: "var(--text-muted)" }}>
+                          ({avgRatingByCourse[c.id].count} valoración{avgRatingByCourse[c.id].count === 1 ? "" : "es"})
+                        </span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+                      {entries.map(([name, r]) => (
+                        <div key={name} style={{ borderTop: "1px solid var(--border)", paddingTop: "var(--sp-2)" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <Avatar name={name} size={22} />
+                              <span style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{name}</span>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <div style={{ display: "flex", gap: 1 }}>
+                                {[1, 2, 3, 4, 5].map((n) => (
+                                  <Star key={n} size={12} fill={r.rating >= n ? "var(--warning)" : "none"} color={r.rating >= n ? "var(--warning)" : "var(--border-strong)"} />
+                                ))}
+                              </div>
+                              <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{r.ratedAt || ""}</span>
+                            </div>
+                          </div>
+                          {r.ratingComment && (
+                            <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginTop: 4, marginLeft: 30, fontStyle: "italic" }}>
+                              "{r.ratingComment}"
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })
+          )}
+        </div>
+      )}
+
+      {tab === "notificaciones" && mode !== "team" && (
         <div className="space-y-4">
           <button
             onClick={onLoadTracking}
@@ -4700,7 +6258,7 @@ function AdminPanel({
         </div>
       )}
 
-      {tab === "backup" && (
+      {tab === "backup" && mode !== "team" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
             <div className="font-bold text-sm mb-1">Estado de la copia de seguridad</div>
