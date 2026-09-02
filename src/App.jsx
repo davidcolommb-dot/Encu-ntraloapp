@@ -2424,6 +2424,15 @@ export default function AulaVirtualMB() {
     return employees.find((e) => e.name === currentUser)?.managedGroupIds || [];
   }, [employees, currentUser]);
 
+  // El puesto de la persona que ha iniciado sesión, y su checklist si tiene
+  // uno asignado — es lo que decide si le aparece la píldora "Mi checklist".
+  const myEmployeeRecord = useMemo(() => employees.find((e) => e.name === currentUser) || null, [employees, currentUser]);
+  const myPuesto = useMemo(() => {
+    if (!myEmployeeRecord?.puestoId) return null;
+    return puestos.find((p) => p.id === myEmployeeRecord.puestoId) || null;
+  }, [myEmployeeRecord, puestos]);
+  const myChecklistResponses = useMemo(() => checklistResponses[currentUser] || null, [checklistResponses, currentUser]);
+
   // Estado de cada miembro del equipo que gestiona esta persona (si es
   // responsable de alguno) — para el panel visual en su propio Inicio.
   const myTeamStatus = useMemo(() => {
@@ -3046,6 +3055,20 @@ export default function AulaVirtualMB() {
                   {!isCompactHeader && <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)" }}>Mi equipo</span>}
                 </button>
               )}
+              {myPuesto && (
+                <button
+                  onClick={() => setView("checklist")}
+                  style={{
+                    display: "flex", alignItems: "center", gap: isCompactHeader ? 0 : 5, borderRadius: "var(--radius-full)",
+                    padding: isCompactHeader ? "4px 5px" : "4px 8px",
+                    backgroundColor: "var(--success-soft)", border: view === "checklist" ? "1.5px solid var(--success)" : "1.5px solid transparent", cursor: "pointer",
+                  }}
+                  title="Mi checklist"
+                >
+                  <ClipboardList size={13} style={{ color: "var(--success)" }} />
+                  {!isCompactHeader && <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--success)" }}>Mi checklist</span>}
+                </button>
+              )}
               {isAdmin && (
                 <div style={{
                   display: "flex", alignItems: "center", gap: isCompactHeader ? 0 : 5, borderRadius: "var(--radius-full)",
@@ -3184,6 +3207,14 @@ export default function AulaVirtualMB() {
             getStatus={getStatus}
             onOpenCourse={(courseId) => openCourse(courseId, "path")}
             onBack={() => setView("routes")}
+          />
+        )}
+        {view === "checklist" && myPuesto && (
+          <MyChecklistView
+            puesto={myPuesto}
+            employee={myEmployeeRecord}
+            responseEntry={myChecklistResponses}
+            onSetLevel={(itemId, level) => setChecklistItemLevel(currentUser, myPuesto.id, itemId, level)}
           />
         )}
         {view === "catalog" && (
@@ -3871,6 +3902,99 @@ function RoutesListView({ paths, courses, currentUser, getStatus, onOpenPath }) 
           );
         })}
       </div>
+    </div>
+  );
+}
+
+const CHECKLIST_LEVELS = [
+  { id: "no_se", label: "No lo sé", icon: X, variant: "danger" },
+  { id: "en_proceso", label: "En proceso", icon: Clock, variant: "warning" },
+  { id: "domina", label: "Lo domino", icon: CheckCircle2, variant: "success" },
+];
+
+function MyChecklistView({ puesto, employee, responseEntry, onSetLevel }) {
+  if (!puesto) return null;
+  const responses = responseEntry?.responses || {};
+  const answeredCount = puesto.checklistItems.filter((i) => !!responses[i.id]?.level).length;
+  const total = puesto.checklistItems.length;
+  const percent = total > 0 ? Math.round((answeredCount / total) * 100) : 0;
+  const deadlineInfo = getChecklistDeadlineInfo(employee, puesto, responseEntry);
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      <div style={{ marginBottom: "var(--sp-4)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <ClipboardList size={20} style={{ color: "var(--success)" }} />
+          <h1 style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--text-primary)", margin: 0 }}>{puesto.name}</h1>
+        </div>
+        <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: 0 }}>
+          Checklist de conocimientos, aptitudes y habilidades de tu puesto. Marca con sinceridad lo que sabes de verdad — no es un examen, es para que tú y RRHH tengáis claro de dónde partes.
+        </p>
+        {deadlineInfo.hasDeadline && (
+          <div style={{ marginTop: 8 }}>
+            <StatusPill
+              icon={deadlineInfo.overdue ? AlertTriangle : Clock}
+              label={deadlineInfo.complete ? "Completado" : deadlineInfo.overdue ? `Plazo vencido hace ${Math.abs(deadlineInfo.daysLeft)} día${Math.abs(deadlineInfo.daysLeft) === 1 ? "" : "s"}` : `${deadlineInfo.daysLeft} día${deadlineInfo.daysLeft === 1 ? "" : "s"} de plazo`}
+              variant={deadlineInfo.complete ? "success" : deadlineInfo.overdue ? "danger" : "warning"}
+            />
+          </div>
+        )}
+      </div>
+
+      <div style={{ ...DS.card, padding: "var(--sp-4)", marginBottom: "var(--sp-5)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{answeredCount}/{total} autoevaluados</span>
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--brand)" }}>{percent}%</span>
+        </div>
+        <div style={{ height: 8, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${percent}%`, backgroundColor: percent === 100 ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)" }} />
+        </div>
+      </div>
+
+      {CHECKLIST_CATEGORIES.map((cat) => {
+        const catItems = puesto.checklistItems.filter((i) => i.category === cat.id);
+        if (catItems.length === 0) return null;
+        return (
+          <div key={cat.id} style={{ marginBottom: "var(--sp-5)" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: cat.color, marginBottom: "var(--sp-2)" }}>{cat.label.toUpperCase()}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+              {catItems.map((item) => {
+                const resp = responses[item.id];
+                return (
+                  <div key={item.id} style={{ ...DS.card, padding: "var(--sp-3)" }}>
+                    <div style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", marginBottom: 8 }}>{item.text}</div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                      {CHECKLIST_LEVELS.map((lvl) => {
+                        const selected = resp?.level === lvl.id;
+                        return (
+                          <button
+                            key={lvl.id}
+                            onClick={() => onSetLevel(item.id, lvl.id)}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 600,
+                              padding: "5px 10px", borderRadius: "var(--radius-full)", cursor: "pointer",
+                              border: selected ? "1.5px solid transparent" : "1.5px solid var(--border)",
+                              backgroundColor: selected ? `var(--${lvl.variant})` : "var(--bg-card)",
+                              color: selected ? "white" : "var(--text-secondary)",
+                            }}
+                          >
+                            <lvl.icon size={11} /> {lvl.label}
+                          </button>
+                        );
+                      })}
+                      {resp?.validated && (
+                        <span style={{ fontSize: 10, fontWeight: 600, color: "var(--info)", display: "flex", alignItems: "center", gap: 3, marginLeft: 4 }}>
+                          <ShieldCheck size={11} /> Confirmado por {resp.updatedBy}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -5256,6 +5380,14 @@ function AdminPanel({
   restrictToGroupIds = [],
 }) {
   const [tab, setTab] = useState("courses");
+
+  // El seguimiento se actualiza solo al entrar aquí — nadie debería tener que
+  // acordarse de pulsar ningún botón para que los datos estén al día, tanto
+  // en el panel de administración completo como en "Mi equipo".
+  useEffect(() => {
+    onLoadTracking();
+  }, []);
+
   const emptyQuestion = { question: "", options: ["", "", "", ""], correct: 0 };
   const emptyAssignment = { mode: "todos", groupIds: [], employeeNames: [] };
   const [draft, setDraft] = useState({
@@ -6896,18 +7028,11 @@ function AdminPanel({
 
       {tab === "seguimiento" && mode !== "team" && (
         <div className="space-y-3">
-          <button
-            onClick={onLoadTracking}
-            disabled={loadingTracking}
-            className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 flex items-center gap-2 transition-all duration-150 active:scale-[0.98]"
-            style={{ backgroundColor: BRAND.red }}
-          >
-            {loadingTracking && <Loader2 size={14} className="animate-spin" />}
-            {loadingTracking ? "Cargando..." : "Cargar / actualizar seguimiento"}
-          </button>
-          <div className="text-[11px] text-gray-400">
-            Con muchos empleados y formaciones esto puede tardar unos segundos — cada formación guarda su progreso por separado, precisamente para que nadie pierda datos si varias personas terminan un test a la vez.
-          </div>
+          {loadingTracking && (
+            <div className="text-xs text-gray-400 flex items-center gap-2">
+              <Loader2 size={13} className="animate-spin" /> Actualizando datos de seguimiento...
+            </div>
+          )}
 
           <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
             <div className="font-bold text-sm mb-1">Marcar manualmente</div>
@@ -7118,15 +7243,11 @@ function AdminPanel({
 
       {tab === "notificaciones" && mode !== "team" && (
         <div className="space-y-4">
-          <button
-            onClick={onLoadTracking}
-            disabled={loadingTracking}
-            className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 flex items-center gap-2 transition-all duration-150 active:scale-[0.98]"
-            style={{ backgroundColor: BRAND.red }}
-          >
-            {loadingTracking && <Loader2 size={14} className="animate-spin" />}
-            {loadingTracking ? "Cargando..." : "Actualizar lista de pendientes"}
-          </button>
+          {loadingTracking && (
+            <div className="text-xs text-gray-400 flex items-center gap-2">
+              <Loader2 size={13} className="animate-spin" /> Actualizando lista de pendientes...
+            </div>
+          )}
 
           <div className="rounded-xl border bg-white overflow-hidden shadow-sm" style={{ borderColor: "#00000012" }}>
             <table className="w-full text-sm">
@@ -7143,7 +7264,7 @@ function AdminPanel({
                 {pendingReportRows.length === 0 && (
                   <tr>
                     <td colSpan={5} className="px-3 py-6 text-center text-gray-400">
-                      Nadie tiene formaciones pendientes ahora mismo (o falta pulsar "Actualizar lista de pendientes").
+                      Nadie tiene formaciones pendientes ahora mismo.
                     </td>
                   </tr>
                 )}
