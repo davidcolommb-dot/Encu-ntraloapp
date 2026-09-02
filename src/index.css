@@ -141,12 +141,13 @@ body {
 .mb-role-pill { gap: 4px; padding: 4px 5px !important; }
 .mb-admin-label { display: none; }
 
-/* Por defecto (hasta escritorios de verdad anchos) solo iconos, sin texto —
-   así la fila de navegación nunca necesita desplazarse, ni con varias
-   píldoras de rol a la derecha a la vez. El texto completo y los espaciados
-   más cómodos solo aparecen en pantallas amplias, como un extra, no como
-   algo necesario para que quepa todo. */
-@media (min-width: 1024px) {
+/* Por defecto (pantallas estrechas de verdad: móvil, tablet en vertical)
+   solo iconos, sin texto — así la fila de navegación nunca necesita
+   desplazarse. A partir de 900px (cualquier portátil real, incluso uno
+   modesto) ya cabe todo con el texto completo — calculado con números
+   exactos, no a ojo: la fila completa necesita como mucho ~868px, así que
+   900px deja margen de sobra. */
+@media (min-width: 900px) {
   .mb-header-container { padding: 0 16px; }
   .mb-header-inner { height: 56px; gap: 12px; }
   .mb-logo { height: 26px; }

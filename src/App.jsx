@@ -3,7 +3,7 @@ import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
   Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp, ChevronRight,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
-  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check
+  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check, Eye
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { PublicClientApplication } from "@azure/msal-browser";
@@ -100,6 +100,17 @@ function isCourseExpired(course, record) {
   const expiryDate = new Date(completedDate);
   expiryDate.setMonth(expiryDate.getMonth() + course.validityMonths);
   return new Date() > expiryDate;
+}
+
+// Una formación queda "a la espera de valoración" (el paso final antes de
+// "completada") solo cuando se cumplen TODAS sus condiciones: el test/form
+// correspondiente, Y el caso práctico si la formación tiene uno configurado.
+// Corregir el caso práctico es aparte — no hace falta esperar a que un
+// admin lo corrija para que la persona termine su formación.
+function computeAwaitingRating(course, rec) {
+  const quizOk = !!rec?.quizPassed;
+  const caseOk = !course?.practicalCase || !!rec?.practicalCaseAnswer;
+  return quizOk && caseOk;
 }
 
 function daysFromNow(n) {
@@ -374,7 +385,7 @@ function isAssignedToUser(course, userName, groups) {
 // mismo. Es la base tanto del panel de Admin como del de "Mi equipo".
 function computeEmployeeCompliance(employees, courses, groups, completionsByCourse) {
   return employees.map((emp) => {
-    let totalAssigned = 0, completed = 0, overdueCount = 0;
+    let totalAssigned = 0, completed = 0, overdueCount = 0, needsFormReview = 0, needsCaseReview = 0;
     const courseDetails = [];
     for (const c of courses) {
       if (!isAssignedToUser(c, emp.name, groups)) continue;
@@ -384,23 +395,35 @@ function computeEmployeeCompliance(employees, courses, groups, completionsByCour
       const expired = rawDone && isCourseExpired(c, rec);
       const done = rawDone && !expired;
       const overdue = !done && c.deadline && daysUntil(c.deadline) < 0;
+      // Un Google Form completado es siempre "autodeclarado" — la app nunca ve
+      // las respuestas, así que se marca para revisión manual hasta que
+      // alguien con permiso lo compruebe por fuera y lo confirme aquí.
+      const pendingFormReview = done && c.testMode === "googleform" && !rec?.formReviewed;
+      // El caso práctico puede estar "enviado" incluso antes de que la
+      // formación entera cuente como completada (o justo al mismo tiempo) —
+      // se marca para corregir en cuanto llega, sin esperar a nada más.
+      const pendingCaseReview = !!c.practicalCase && rec?.practicalCaseAnswer?.status === "enviado";
       if (done) completed++;
       if (overdue) overdueCount++;
-      courseDetails.push({ course: c, record: rec, done, overdue, expired });
+      if (pendingFormReview) needsFormReview++;
+      if (pendingCaseReview) needsCaseReview++;
+      courseDetails.push({ course: c, record: rec, done, overdue, expired, pendingFormReview, pendingCaseReview });
     }
     const percent = totalAssigned > 0 ? Math.round((completed / totalAssigned) * 100) : 100;
-    return { employee: emp, totalAssigned, completed, overdueCount, percent, courseDetails };
+    return { employee: emp, totalAssigned, completed, overdueCount, needsFormReview, needsCaseReview, percent, courseDetails };
   });
 }
 
 // Panel de cumplimiento reutilizable: lo usan tanto el Admin completo (con
 // todos los empleados) como el panel "Mi equipo" de un responsable (con solo
 // los suyos) — misma calidad de herramienta para los dos casos.
-function ComplianceView({ employees, courses, groups, completionsByCourse }) {
+function ComplianceView({ employees, courses, groups, completionsByCourse, onMarkFormReviewed }) {
   const [viewMode, setViewMode] = useState("person"); // "person" | "course"
   const [personSearch, setPersonSearch] = useState("");
   const [personSort, setPersonSort] = useState("overdue");
   const [expandedPerson, setExpandedPerson] = useState(null);
+  const [correctingCase, setCorrectingCase] = useState(null); // "courseId__employeeName" o null
+  const [correctionText, setCorrectionText] = useState("");
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [courseSearch, setCourseSearch] = useState("");
 
@@ -413,7 +436,9 @@ function ComplianceView({ employees, courses, groups, completionsByCourse }) {
     const totalOverdue = compliance.reduce((sum, c) => sum + c.overdueCount, 0);
     const avgPercent = compliance.length ? Math.round(compliance.reduce((sum, c) => sum + c.percent, 0) / compliance.length) : 0;
     const upToDate = compliance.filter((c) => c.percent === 100).length;
-    return { totalOverdue, avgPercent, upToDate };
+    const totalFormReview = compliance.reduce((sum, c) => sum + c.needsFormReview, 0);
+    const totalCaseReview = compliance.reduce((sum, c) => sum + c.needsCaseReview, 0);
+    return { totalOverdue, avgPercent, upToDate, totalFormReview, totalCaseReview };
   }, [compliance]);
 
   const filteredSorted = useMemo(() => {
@@ -436,7 +461,8 @@ function ComplianceView({ employees, courses, groups, completionsByCourse }) {
         const expired = rawDone && isCourseExpired(selectedCourse, rec);
         const done = rawDone && !expired;
         const overdue = !done && selectedCourse.deadline && daysUntil(selectedCourse.deadline) < 0;
-        return { employee: e, record: rec, done, overdue, expired };
+        const pendingFormReview = done && selectedCourse.testMode === "googleform" && !rec?.formReviewed;
+        return { employee: e, record: rec, done, overdue, expired, pendingFormReview };
       });
   }, [selectedCourse, employees, groups, completionsByCourse, courseSearch]);
   const courseDoneCount = courseRows.filter((r) => r.done).length;
@@ -461,6 +487,14 @@ function ComplianceView({ employees, courses, groups, completionsByCourse }) {
         <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
           <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: overallStats.totalOverdue > 0 ? "var(--danger)" : "var(--text-muted)" }}>{overallStats.totalOverdue}</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Formaciones vencidas (total)</div>
+        </div>
+        <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
+          <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: overallStats.totalFormReview > 0 ? "var(--info)" : "var(--text-muted)" }}>{overallStats.totalFormReview}</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Forms externos por revisar</div>
+        </div>
+        <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
+          <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: overallStats.totalCaseReview > 0 ? "var(--info)" : "var(--text-muted)" }}>{overallStats.totalCaseReview}</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Casos prácticos por corregir</div>
         </div>
       </div>
 
@@ -538,13 +572,24 @@ function ComplianceView({ employees, courses, groups, completionsByCourse }) {
                       <div style={{ padding: "0 var(--sp-3) var(--sp-3)", display: "flex", flexDirection: "column", gap: 6 }}>
                         {c.courseDetails.length === 0 && <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Sin formaciones asignadas.</div>}
                         {c.courseDetails.map((d) => (
-                          <div key={d.course.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-inset)" }}>
+                          <div key={d.course.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-inset)", flexWrap: "wrap" }}>
                             <span style={{ fontSize: "var(--text-xs)", color: "var(--text-primary)" }}>{d.course.title}</span>
-                            <StatusPill
-                              icon={d.done ? CheckCircle2 : d.overdue ? AlertTriangle : Clock}
-                              label={d.done ? "Completada" : d.overdue ? "Vencida" : d.expired ? "Caducada" : "Pendiente"}
-                              variant={d.done ? "success" : d.overdue ? "danger" : "warning"}
-                            />
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              {d.pendingFormReview && (
+                                <button
+                                  onClick={() => onMarkFormReviewed(d.course.id, c.employee.name)}
+                                  title="Marcar como revisado tras comprobar sus respuestas en el propio Google Form"
+                                  style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--info-soft)", color: "var(--info)", border: "none", cursor: "pointer" }}
+                                >
+                                  <FileText size={10} /> Revisar Form
+                                </button>
+                              )}
+                              <StatusPill
+                                icon={d.done ? CheckCircle2 : d.overdue ? AlertTriangle : Clock}
+                                label={d.done ? "Completada" : d.overdue ? "Vencida" : d.expired ? "Caducada" : "Pendiente"}
+                                variant={d.done ? "success" : d.overdue ? "danger" : "warning"}
+                              />
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -600,8 +645,17 @@ function ComplianceView({ employees, courses, groups, completionsByCourse }) {
                         <Avatar name={r.employee.name} size={24} />
                         <span style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{r.employee.name}</span>
                       </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         {r.record?.score != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{r.record.score}%</span>}
+                        {r.pendingFormReview && (
+                          <button
+                            onClick={() => onMarkFormReviewed(selectedCourse.id, r.employee.name)}
+                            title="Marcar como revisado tras comprobar sus respuestas en el propio Google Form"
+                            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--info-soft)", color: "var(--info)", border: "none", cursor: "pointer" }}
+                          >
+                            <FileText size={10} /> Revisar Form
+                          </button>
+                        )}
                         <StatusPill
                           icon={r.done ? CheckCircle2 : r.overdue ? AlertTriangle : Clock}
                           label={r.done ? "Completada" : r.overdue ? "Vencida" : r.expired ? "Caducada" : "Pendiente"}
@@ -1304,6 +1358,94 @@ function RatingStars({ rating, ratingComment, awaitingRating, onRate }) {
   );
 }
 
+// Caso práctico: la persona escribe su respuesta, la envía, y espera a que
+// alguien (admin o responsable) le devuelva una corrección. Enviarlo cuenta
+// para completar la formación; la corrección en sí es un paso aparte que
+// llega después, sin bloquear nada.
+function PracticalCaseSection({ practicalCase, answer, onSubmit }) {
+  const [text, setText] = useState(answer?.text || "");
+  const [editing, setEditing] = useState(!answer);
+
+  if (!practicalCase) return null;
+
+  const hasAnswer = !!answer;
+  const isCorrected = answer?.status === "corregido";
+
+  return (
+    <div style={{ ...DS.card, padding: "var(--sp-4)" }}>
+      <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", marginBottom: 4, display: "flex", alignItems: "center", gap: 8, color: "var(--text-primary)" }}>
+        <ClipboardList size={16} style={{ color: "var(--brand)" }} />
+        Caso práctico{practicalCase.title ? `: ${practicalCase.title}` : ""}
+      </div>
+      <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: "var(--sp-3)", whiteSpace: "pre-line" }}>
+        {practicalCase.description}
+      </div>
+
+      {hasAnswer && !editing && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4 }}>TU RESPUESTA</div>
+            <div style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", backgroundColor: "var(--bg-inset)", padding: "var(--sp-3)", borderRadius: "var(--radius-md)", whiteSpace: "pre-line" }}>
+              {answer.text}
+            </div>
+          </div>
+
+          {isCorrected ? (
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "var(--success-text)", marginBottom: 4, display: "flex", alignItems: "center", gap: 4 }}>
+                <CheckCircle2 size={12} /> CORRECCIÓN{answer.correctedBy ? ` DE ${answer.correctedBy.toUpperCase()}` : ""}
+              </div>
+              <div style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", backgroundColor: "var(--success-soft)", padding: "var(--sp-3)", borderRadius: "var(--radius-md)", whiteSpace: "pre-line" }}>
+                {answer.feedback}
+              </div>
+            </div>
+          ) : (
+            <StatusPill icon={Clock} label="Enviado — a la espera de corrección" variant="warning" />
+          )}
+
+          {!isCorrected && (
+            <button
+              onClick={() => setEditing(true)}
+              style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer", width: "fit-content" }}
+            >
+              Editar mi respuesta
+            </button>
+          )}
+        </div>
+      )}
+
+      {(editing || !hasAnswer) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Escribe aquí tu respuesta a este caso..."
+            rows={5}
+            style={{ width: "100%", fontSize: "var(--text-sm)", padding: "8px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontFamily: "inherit", resize: "vertical" }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              disabled={!text.trim()}
+              onClick={() => {
+                onSubmit(text);
+                setEditing(false);
+              }}
+              style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !text.trim() ? 0.4 : 1, width: "fit-content" }}
+            >
+              Enviar respuesta
+            </button>
+            {hasAnswer && (
+              <button onClick={() => { setText(answer.text); setEditing(false); }} style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-muted)", border: "none", background: "none", cursor: "pointer" }}>
+                Cancelar
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DeadlineChip({ deadline, completed }) {
   if (completed) {
     return <StatusPill icon={CheckCircle2} label="Completada" variant="success" />;
@@ -2000,20 +2142,17 @@ export default function AulaVirtualMB() {
     // con otra persona completando la MISMA formación casi al mismo tiempo.
     const current = await loadKey(`mb_completions_course_${activeCourse.id}`, {});
     const prev = current[currentUser] || { attempts: 0 };
-    const updated = {
-      ...current,
-      [currentUser]: {
-        // Aprobar el test ya no marca "completada" directamente: falta la
-        // valoración obligatoria. awaitingRating es lo que la interfaz usa
-        // para saber que toca pedirla antes de dar la formación por hecha.
-        status: "en_progreso",
-        startedAt: prev.startedAt || todayISO(),
-        completedAt: null,
-        score,
-        attempts: (prev.attempts || 0) + 1,
-        awaitingRating: passed,
-      },
+    const newRec = {
+      ...prev,
+      status: "en_progreso",
+      startedAt: prev.startedAt || todayISO(),
+      completedAt: null,
+      score,
+      attempts: (prev.attempts || 0) + 1,
+      quizPassed: passed,
     };
+    newRec.awaitingRating = computeAwaitingRating(activeCourse, newRec);
+    const updated = { ...current, [currentUser]: newRec };
     setCompletionsByCourse((prevState) => ({ ...prevState, [activeCourse.id]: updated }));
     await saveKey(`mb_completions_course_${activeCourse.id}`, updated);
     setQuizResult({ score, passed, correctCount, total: quiz.length });
@@ -2022,7 +2161,8 @@ export default function AulaVirtualMB() {
   // Formaciones "por módulos": cada módulo tiene su propio mini-test, y hay que
   // aprobar uno para desbloquear el siguiente. Al aprobar el último módulo, la
   // formación queda "a la espera de valoración" — no se da por completada del
-  // todo hasta que la persona puntúa (ver rateCourse).
+  // todo hasta que la persona puntúa (ver rateCourse) y, si la formación tiene
+  // caso práctico, hasta que lo envía también.
   async function submitModuleQuiz(courseId, moduleObj) {
     if (!currentUser) return null;
     const quiz = moduleObj.quiz || [];
@@ -2054,8 +2194,9 @@ export default function AulaVirtualMB() {
       status: "en_progreso",
       moduleProgress,
       completedAt: null,
-      awaitingRating: allPassed,
+      quizPassed: allPassed,
     };
+    updatedRec.awaitingRating = computeAwaitingRating(course, updatedRec);
     const updated = { ...current, [currentUser]: updatedRec };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
     await saveKey(`mb_completions_course_${courseId}`, updated);
@@ -2067,18 +2208,68 @@ export default function AulaVirtualMB() {
 
   async function selfReportComplete(courseId) {
     if (!currentUser) return;
+    const course = courses.find((c) => c.id === courseId);
     const current = await loadKey(`mb_completions_course_${courseId}`, {});
     const prev = current[currentUser] || { attempts: 0 };
+    const newRec = {
+      ...prev,
+      status: "en_progreso",
+      startedAt: prev.startedAt || todayISO(),
+      completedAt: null,
+      score: null,
+      selfReported: true,
+      attempts: (prev.attempts || 0) + 1,
+      quizPassed: true,
+    };
+    newRec.awaitingRating = computeAwaitingRating(course, newRec);
+    const updated = { ...current, [currentUser]: newRec };
+    setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
+    await saveKey(`mb_completions_course_${courseId}`, updated);
+  }
+
+  // Caso práctico: la persona escribe su respuesta libremente. Contar como
+  // "enviado" es lo que hace falta para poder completar la formación — la
+  // corrección de un admin/responsable es un paso aparte, después, que no
+  // bloquea que la persona siga adelante con su día.
+  async function submitPracticalCase(courseId, text) {
+    if (!currentUser || !text.trim()) return;
+    const course = courses.find((c) => c.id === courseId);
+    const current = await loadKey(`mb_completions_course_${courseId}`, {});
+    const prev = current[currentUser] || { attempts: 0, startedAt: todayISO() };
+    const newRec = {
+      ...prev,
+      practicalCaseAnswer: {
+        text: text.trim(),
+        submittedAt: todayISO(),
+        status: "enviado",
+        feedback: null,
+        correctedBy: null,
+        correctedAt: null,
+      },
+    };
+    newRec.awaitingRating = computeAwaitingRating(course, newRec);
+    const updated = { ...current, [currentUser]: newRec };
+    setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
+    await saveKey(`mb_completions_course_${courseId}`, updated);
+  }
+
+  // Corrección de un caso práctico: la hace un admin o un responsable, nunca
+  // la propia persona que respondió. No cambia si la formación cuenta como
+  // completada (eso ya pasó al enviarlo) — es solo la devolución de feedback.
+  async function correctPracticalCase(courseId, employeeName, feedback) {
+    const current = await loadKey(`mb_completions_course_${courseId}`, {});
+    if (!current[employeeName]?.practicalCaseAnswer) return;
     const updated = {
       ...current,
-      [currentUser]: {
-        status: "en_progreso",
-        startedAt: prev.startedAt || todayISO(),
-        completedAt: null,
-        score: null,
-        selfReported: true,
-        attempts: (prev.attempts || 0) + 1,
-        awaitingRating: true,
+      [employeeName]: {
+        ...current[employeeName],
+        practicalCaseAnswer: {
+          ...current[employeeName].practicalCaseAnswer,
+          status: "corregido",
+          feedback: feedback.trim(),
+          correctedBy: currentUser || "Administrador",
+          correctedAt: todayISO(),
+        },
       },
     };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
@@ -2090,6 +2281,18 @@ export default function AulaVirtualMB() {
   // (awaitingRating), al valorar pasa a "completada" de verdad, con fecha de
   // hoy. Si ya estaba completada de antes (por ejemplo, alguien que cambia su
   // valoración más adelante), simplemente actualiza la nota sin tocar el resto.
+  // El único caso en que un formulario externo (Google Form) queda marcado
+  // "revisado" es cuando alguien con permiso de administración lo comprueba a
+  // mano por fuera de la app — la propia app nunca puede saber qué se
+  // respondió, así que esto es deliberadamente manual.
+  async function markFormReviewed(courseId, employeeName) {
+    const current = await loadKey(`mb_completions_course_${courseId}`, {});
+    if (!current[employeeName]) return;
+    const updated = { ...current, [employeeName]: { ...current[employeeName], formReviewed: true } };
+    setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
+    await saveKey(`mb_completions_course_${courseId}`, updated);
+  }
+
   async function rateCourse(courseId, rating, comment) {
     if (!currentUser) return;
     const current = await loadKey(`mb_completions_course_${courseId}`, {});
@@ -2896,6 +3099,7 @@ export default function AulaVirtualMB() {
             }}
             onSelfReport={() => selfReportComplete(activeCourse.id)}
             onRateCourse={(rating, comment) => rateCourse(activeCourse.id, rating, comment)}
+            onSubmitPracticalCase={(text) => submitPracticalCase(activeCourse.id, text)}
             onBack={() => setView(courseOrigin === "path" ? "path-detail" : "catalog")}
             onRetry={() => {
               setQuizAnswers({});
@@ -2934,6 +3138,7 @@ export default function AulaVirtualMB() {
             onDeleteGroup={deleteGroup}
             onUpdateGroupMembers={updateGroupMembers}
             onManualSetStatus={manualSetStatus}
+            onMarkFormReviewed={markFormReviewed}
             onExportBackup={exportBackup}
             onImportBackup={importBackup}
           />
@@ -2971,6 +3176,7 @@ export default function AulaVirtualMB() {
             onDeleteGroup={deleteGroup}
             onUpdateGroupMembers={updateGroupMembers}
             onManualSetStatus={manualSetStatus}
+            onMarkFormReviewed={markFormReviewed}
             onExportBackup={exportBackup}
             onImportBackup={importBackup}
           />
@@ -3863,7 +4069,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
 }
 
 
-function CourseDetail({ course, currentUser, status, record, quizAnswers, setQuizAnswers, quizResult, onSubmitQuiz, onSubmitModuleQuiz, onResetQuiz, onSelfReport, onRateCourse, onBack, onRetry }) {
+function CourseDetail({ course, currentUser, status, record, quizAnswers, setQuizAnswers, quizResult, onSubmitQuiz, onSubmitModuleQuiz, onResetQuiz, onSelfReport, onRateCourse, onSubmitPracticalCase, onBack, onRetry }) {
   if (course.modules && course.modules.length > 0) {
     return (
       <ModularCourseDetail
@@ -3876,6 +4082,7 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
         onSubmitModuleQuiz={onSubmitModuleQuiz}
         onResetQuiz={onResetQuiz}
         onRateCourse={onRateCourse}
+        onSubmitPracticalCase={onSubmitPracticalCase}
         onBack={onBack}
       />
     );
@@ -4082,6 +4289,14 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
             </div>
           )}
         </div>
+      )}
+
+      {course.practicalCase && currentUser && (
+        <PracticalCaseSection
+          practicalCase={course.practicalCase}
+          answer={record?.practicalCaseAnswer}
+          onSubmit={(text) => onSubmitPracticalCase(text)}
+        />
       )}
 
       {(status === "completada" || record?.awaitingRating) && currentUser && (
@@ -4292,7 +4507,7 @@ function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers
   );
 }
 
-function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuizAnswers, quizResult, onSubmitModuleQuiz, onResetQuiz, onRateCourse, onBack }) {
+function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuizAnswers, quizResult, onSubmitModuleQuiz, onResetQuiz, onRateCourse, onSubmitPracticalCase, onBack }) {
   const modules = course.modules;
   const moduleProgress = record?.moduleProgress || {};
   const passedCount = modules.filter((m) => moduleProgress[m.id]?.passed).length;
@@ -4370,6 +4585,13 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
               />
             )}
           </div>
+          {allDone && course.practicalCase && currentUser && (
+            <PracticalCaseSection
+              practicalCase={course.practicalCase}
+              answer={record?.practicalCaseAnswer}
+              onSubmit={(text) => onSubmitPracticalCase(text)}
+            />
+          )}
           {allDone && currentUser && (
             <RatingStars rating={record?.rating || 0} ratingComment={record?.ratingComment} awaitingRating={!!record?.awaitingRating} onRate={onRateCourse} />
           )}
@@ -4619,6 +4841,114 @@ function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDelete
   );
 }
 
+// Vista previa de una formación tal como la vería un empleado — usa el propio
+// CourseDetail de siempre (con toda su lógica de módulos/test incluida), pero
+// con un estado local aislado: nada de lo que se haga aquí (responder al
+// test, valorar, marcar como visto) toca la base de datos real.
+function CoursePreviewOverlay({ draft, onClose }) {
+  const [quizAnswers, setQuizAnswers] = useState({});
+  const [quizResult, setQuizResult] = useState(null);
+  const [record, setRecord] = useState({ status: "pendiente", moduleProgress: {} });
+  const PREVIEW_USER = "Vista previa";
+
+  function resetQuiz() {
+    setQuizAnswers({});
+    setQuizResult(null);
+  }
+
+  function submitQuiz() {
+    const quiz = draft.quiz || [];
+    let correctCount = 0;
+    quiz.forEach((q, i) => {
+      if (quizAnswers[i] === q.correct) correctCount++;
+    });
+    const score = quiz.length ? Math.round((correctCount / quiz.length) * 100) : 100;
+    const passed = score >= (draft.passPct ?? 70);
+    setRecord((prev) => {
+      const next = { ...prev, status: "en_progreso", score, quizPassed: passed };
+      next.awaitingRating = computeAwaitingRating(draft, next);
+      return next;
+    });
+    setQuizResult({ score, passed, correctCount, total: quiz.length });
+  }
+
+  function submitModuleQuiz(moduleObj) {
+    const quiz = moduleObj.quiz || [];
+    let correctCount = 0;
+    quiz.forEach((q, i) => {
+      if (quizAnswers[i] === q.correct) correctCount++;
+    });
+    const score = quiz.length ? Math.round((correctCount / quiz.length) * 100) : 100;
+    const passed = score >= (moduleObj.passPct ?? 70);
+    let result;
+    setRecord((prev) => {
+      const moduleProgress = { ...(prev.moduleProgress || {}), [moduleObj.id]: { passed, score } };
+      const allPassed = (draft.modules || []).every((m) => moduleProgress[m.id]?.passed);
+      const next = { ...prev, moduleProgress, status: "en_progreso", quizPassed: allPassed };
+      next.awaitingRating = computeAwaitingRating(draft, next);
+      return next;
+    });
+    result = { score, passed, correctCount, total: quiz.length };
+    setQuizResult(result);
+    return result;
+  }
+
+  function selfReport() {
+    setRecord((prev) => {
+      const next = { ...prev, status: "en_progreso", selfReported: true, quizPassed: true };
+      next.awaitingRating = computeAwaitingRating(draft, next);
+      return next;
+    });
+  }
+
+  function submitPracticalCasePreview(text) {
+    setRecord((prev) => {
+      const next = { ...prev, practicalCaseAnswer: { text, submittedAt: todayISO(), status: "enviado" } };
+      next.awaitingRating = computeAwaitingRating(draft, next);
+      return next;
+    });
+  }
+
+  function rate(rating, comment) {
+    setRecord((prev) => ({ ...prev, rating, ratingComment: comment, status: "completada", awaitingRating: false, completedAt: todayISO() }));
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 90, backgroundColor: "var(--bg-page)", overflowY: "auto" }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 10, backgroundColor: "var(--brand)", color: "white", padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+        <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, display: "flex", alignItems: "center", gap: 8 }}>
+          <Eye size={16} /> Vista previa — así lo vería un empleado. Nada de lo que hagas aquí se guarda de verdad.
+        </span>
+        <button
+          onClick={onClose}
+          style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "1px solid white", borderRadius: "var(--radius-md)", color: "white", padding: "5px 12px", cursor: "pointer", fontSize: "var(--text-sm)", fontWeight: 600 }}
+        >
+          <X size={14} /> Cerrar vista previa
+        </button>
+      </div>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: "var(--sp-6) var(--sp-4)" }}>
+        <CourseDetail
+          course={draft}
+          currentUser={PREVIEW_USER}
+          status={record.status}
+          record={record}
+          quizAnswers={quizAnswers}
+          setQuizAnswers={setQuizAnswers}
+          quizResult={quizResult}
+          onSubmitQuiz={submitQuiz}
+          onSubmitModuleQuiz={submitModuleQuiz}
+          onResetQuiz={resetQuiz}
+          onSelfReport={selfReport}
+          onRateCourse={rate}
+          onSubmitPracticalCase={submitPracticalCasePreview}
+          onBack={onClose}
+          onRetry={resetQuiz}
+        />
+      </div>
+    </div>
+  );
+}
+
 function AdminPanel({
   courses,
   news,
@@ -4645,6 +4975,7 @@ function AdminPanel({
   onDeleteGroup,
   onUpdateGroupMembers,
   onManualSetStatus,
+  onMarkFormReviewed,
   onExportBackup,
   onImportBackup,
   onUpdateEmployeeManagedGroups,
@@ -4720,6 +5051,7 @@ function AdminPanel({
       assignment: { ...emptyAssignment },
       modules: [],
       validityMonths: null,
+      practicalCase: null,
     });
     setFileError("");
     setPendingWarnings(null);
@@ -4881,6 +5213,9 @@ function AdminPanel({
   // enlace.
   function getContentWarnings() {
     const warnings = [];
+    if (draft.practicalCase && (!draft.practicalCase.title.trim() || !draft.practicalCase.description.trim())) {
+      warnings.push("El caso práctico está activado pero le falta el título o la descripción del escenario.");
+    }
     function checkQuiz(quiz, context) {
       quiz.forEach((q, qi) => {
         if (!q.question.trim()) warnings.push(`${context}: la pregunta ${qi + 1} no tiene texto.`);
@@ -4906,6 +5241,7 @@ function AdminPanel({
     return warnings;
   }
   const [pendingWarnings, setPendingWarnings] = useState(null);
+  const [showPreview, setShowPreview] = useState(false);
   const [courseListSearch, setCourseListSearch] = useState("");
   const [courseListCategoryFilter, setCourseListCategoryFilter] = useState("");
   function handleSaveClick() {
@@ -5291,6 +5627,40 @@ function AdminPanel({
             </div>
           )}
 
+          <div style={{ ...DS.card, padding: "var(--sp-3)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: draft.practicalCase ? "var(--sp-3)" : 0 }}>
+              <input
+                type="checkbox"
+                id="practical-case-check"
+                checked={!!draft.practicalCase}
+                onChange={(e) => setDraft((d) => ({ ...d, practicalCase: e.target.checked ? { title: "", description: "" } : null }))}
+              />
+              <label htmlFor="practical-case-check" style={{ fontSize: "var(--text-sm)", cursor: "pointer" }}>
+                <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>Caso práctico</span>
+                <span style={{ color: "var(--text-muted)" }}> — un ejercicio de respuesta libre, que corrige a mano un admin o el responsable del equipo. Se suma al test, no lo sustituye.</span>
+              </label>
+            </div>
+            {draft.practicalCase && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+                <input
+                  value={draft.practicalCase.title}
+                  onChange={(e) => setDraft((d) => ({ ...d, practicalCase: { ...d.practicalCase, title: e.target.value } }))}
+                  placeholder="Título del caso (ej. «Gestión de una muestra contaminada»)"
+                  className="w-full text-sm rounded-md border px-3 py-2"
+                  style={{ borderColor: "#00000020" }}
+                />
+                <textarea
+                  value={draft.practicalCase.description}
+                  onChange={(e) => setDraft((d) => ({ ...d, practicalCase: { ...d.practicalCase, description: e.target.value } }))}
+                  placeholder="Describe el escenario y qué se espera que responda la persona..."
+                  rows={5}
+                  className="w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900"
+                  style={{ borderColor: "#00000020" }}
+                />
+              </div>
+            )}
+          </div>
+
           {draft.modules && draft.modules.length > 0 ? (
             <div className="space-y-3">
               <div className="text-xs font-semibold text-gray-500 -mb-1">Módulos, en el orden en que se desbloquean</div>
@@ -5634,6 +6004,14 @@ function AdminPanel({
           )}
 
           <div className="flex gap-2">
+            <button
+              disabled={!canSave()}
+              onClick={() => setShowPreview(true)}
+              className="text-sm font-semibold rounded-md px-4 py-2 border disabled:opacity-40 flex items-center gap-2"
+              style={{ borderColor: "#00000020", color: BRAND.ink }}
+            >
+              <Eye size={15} /> Vista previa
+            </button>
             <button disabled={!canSave() || saving} onClick={handleSaveClick} className="text-sm font-bold rounded-md px-4 py-2 text-white disabled:opacity-40 transition-all duration-150 active:scale-[0.98]" style={{ backgroundColor: BRAND.red }}>
               {saving ? "Guardando..." : "Guardar formación"}
             </button>
@@ -5650,6 +6028,8 @@ function AdminPanel({
           </div>
         </div>
       )}
+
+      {showPreview && <CoursePreviewOverlay draft={draft} onClose={() => setShowPreview(false)} />}
 
       {tab === "paths" && (
         <PathsAdminTab paths={paths} courses={courses} groups={groups} employees={employees} onSavePath={onSavePath} onDeletePath={onDeletePath} mode={mode} />
@@ -6266,7 +6646,7 @@ function AdminPanel({
           )}
 
           <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
-            <ComplianceView employees={employees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} />
+            <ComplianceView employees={employees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} />
           </div>
         </div>
       )}
@@ -6340,7 +6720,7 @@ function AdminPanel({
             <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-3)" }}>
               Cumplimiento de tu equipo
             </div>
-            <ComplianceView employees={teamEmployees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} />
+            <ComplianceView employees={teamEmployees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} />
           </div>
         </div>
       )}
