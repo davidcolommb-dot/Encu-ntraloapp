@@ -4583,6 +4583,8 @@ function AdminPanel({
     return warnings;
   }
   const [pendingWarnings, setPendingWarnings] = useState(null);
+  const [courseListSearch, setCourseListSearch] = useState("");
+  const [courseListCategoryFilter, setCourseListCategoryFilter] = useState("");
   function handleSaveClick() {
     const warnings = getContentWarnings();
     if (warnings.length > 0) setPendingWarnings(warnings);
@@ -4709,55 +4711,116 @@ function AdminPanel({
 
   const [teamNewMemberName, setTeamNewMemberName] = useState("");
 
+  const TAB_GROUPS = [
+    { id: "content", label: "Contenido", icon: LayoutGrid, tabs: ["courses", "editor", "paths", "news"] },
+    { id: "people", label: "Personas", icon: Users, tabs: ["employees", "groups"] },
+    { id: "tracking", label: "Seguimiento", icon: ClipboardList, tabs: ["seguimiento", "reviews"] },
+    { id: "system", label: "Sistema", icon: Settings, tabs: ["notificaciones", "backup"] },
+  ];
+  const TAB_LABELS = {
+    courses: "Formaciones",
+    editor: draft.id ? "Editar formación" : "Nueva formación",
+    paths: "Rutas",
+    news: "Novedades",
+    employees: "Empleados",
+    groups: "Grupos",
+    seguimiento: "Seguimiento",
+    reviews: "Reseñas",
+    notificaciones: "Notificaciones",
+    backup: "Copia de seguridad",
+  };
+  const activeGroup = TAB_GROUPS.find((g) => g.tabs.includes(tab)) || TAB_GROUPS[0];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
       <div>
         <h1 style={{ fontSize: "var(--text-xl)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-4) 0" }}>
           {mode === "team" ? "Mi equipo" : "Administración"}
         </h1>
-        <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
-          {(mode === "team"
-            ? [
-                { id: "courses", label: "Formaciones" },
-                { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
-                { id: "paths", label: "Rutas" },
-                { id: "team", label: "Mi equipo" },
-              ]
-            : [
-                { id: "courses", label: "Formaciones" },
-                { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
-                { id: "paths", label: "Rutas" },
-                { id: "news", label: "Novedades" },
-                { id: "employees", label: "Empleados" },
-                { id: "groups", label: "Grupos" },
-                { id: "seguimiento", label: "Seguimiento" },
-                { id: "reviews", label: "Reseñas" },
-                { id: "notificaciones", label: "Notificaciones" },
-                { id: "backup", label: "Copia de seguridad" },
-              ]
-          ).map((t) => {
-            const active = tab === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => {
-                  if (t.id === "editor" && !draft.title && tab !== "editor") resetDraft();
-                  setTab(t.id);
-                }}
-                style={{
-                  fontSize: "var(--text-sm)", fontWeight: active ? 600 : 500,
-                  padding: "10px 14px", whiteSpace: "nowrap", flexShrink: 0,
-                  color: active ? "var(--brand)" : "var(--text-muted)",
-                  background: "none", border: "none", cursor: "pointer",
-                  borderBottom: active ? "2px solid var(--brand)" : "2px solid transparent",
-                  marginBottom: -1, transition: "color var(--dur-fast) var(--ease-out)",
-                }}
-              >
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
+
+        {mode === "team" ? (
+          <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
+            {[
+              { id: "courses", label: "Formaciones" },
+              { id: "editor", label: draft.id ? "Editar formación" : "Nueva formación" },
+              { id: "paths", label: "Rutas" },
+              { id: "team", label: "Mi equipo" },
+            ].map((t) => {
+              const active = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => {
+                    if (t.id === "editor" && !draft.title && tab !== "editor") resetDraft();
+                    setTab(t.id);
+                  }}
+                  style={{
+                    fontSize: "var(--text-sm)", fontWeight: active ? 600 : 500,
+                    padding: "10px 14px", whiteSpace: "nowrap", flexShrink: 0,
+                    color: active ? "var(--brand)" : "var(--text-muted)",
+                    background: "none", border: "none", cursor: "pointer",
+                    borderBottom: active ? "2px solid var(--brand)" : "2px solid transparent",
+                    marginBottom: -1, transition: "color var(--dur-fast) var(--ease-out)",
+                  }}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <>
+            {/* Nivel 1: categorías — nunca crece, aunque añadamos más pestañas dentro de cada una */}
+            <div style={{ display: "flex", gap: 4, marginBottom: "var(--sp-2)", flexWrap: "wrap" }}>
+              {TAB_GROUPS.map((g) => {
+                const isActiveGroup = g.id === activeGroup.id;
+                return (
+                  <button
+                    key={g.id}
+                    onClick={() => {
+                      if (!g.tabs.includes(tab)) setTab(g.tabs[0]);
+                    }}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 6,
+                      fontSize: "var(--text-sm)", fontWeight: isActiveGroup ? 600 : 500,
+                      padding: "7px 12px", borderRadius: "var(--radius-md)",
+                      color: isActiveGroup ? "var(--brand)" : "var(--text-secondary)",
+                      backgroundColor: isActiveGroup ? "var(--brand-soft)" : "transparent",
+                      border: "none", cursor: "pointer",
+                    }}
+                  >
+                    <g.icon size={14} /> {g.label}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Nivel 2: pestañas concretas dentro de la categoría elegida */}
+            <div style={{ display: "flex", gap: 4, borderBottom: "1px solid var(--border)", overflowX: "auto" }}>
+              {activeGroup.tabs.map((tabId) => {
+                const active = tab === tabId;
+                return (
+                  <button
+                    key={tabId}
+                    onClick={() => {
+                      if (tabId === "editor" && !draft.title && tab !== "editor") resetDraft();
+                      setTab(tabId);
+                    }}
+                    style={{
+                      fontSize: "var(--text-sm)", fontWeight: active ? 600 : 500,
+                      padding: "10px 14px", whiteSpace: "nowrap", flexShrink: 0,
+                      color: active ? "var(--brand)" : "var(--text-muted)",
+                      background: "none", border: "none", cursor: "pointer",
+                      borderBottom: active ? "2px solid var(--brand)" : "2px solid transparent",
+                      marginBottom: -1, transition: "color var(--dur-fast) var(--ease-out)",
+                    }}
+                  >
+                    {TAB_LABELS[tabId]}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
       </div>
 
       {tab === "courses" && (
@@ -4773,8 +4836,40 @@ function AdminPanel({
               <Plus size={15} /> Nueva formación
             </button>
           </div>
+          {courses.length > 4 && (
+            <div style={{ display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", marginBottom: "var(--sp-2)" }}>
+              <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+                <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+                <input
+                  value={courseListSearch}
+                  onChange={(e) => setCourseListSearch(e.target.value)}
+                  placeholder="Buscar por título..."
+                  style={{ width: "100%", padding: "7px 10px 7px 32px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)" }}
+                />
+              </div>
+              <select
+                value={courseListCategoryFilter}
+                onChange={(e) => setCourseListCategoryFilter(e.target.value)}
+                style={{ padding: "7px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)", color: "var(--text-primary)" }}
+              >
+                <option value="">Todos los campos</option>
+                {CATEGORIES.map((cat) => (
+                  <option key={cat.id} value={cat.id}>{cat.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {courses.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay formaciones todavía.</div>}
-          {courses.map((c) => (
+          {(() => {
+            const filtered = courses.filter(
+              (c) =>
+                (!courseListCategoryFilter || c.category === courseListCategoryFilter) &&
+                (!courseListSearch.trim() || c.title.toLowerCase().includes(courseListSearch.trim().toLowerCase()))
+            );
+            if (courses.length > 0 && filtered.length === 0) {
+              return <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Ninguna formación coincide con la búsqueda.</div>;
+            }
+            return filtered.map((c) => (
             <div key={c.id} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "var(--sp-3)", flexWrap: "wrap" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
                 <CategoryTag id={c.category} small />
@@ -4797,7 +4892,8 @@ function AdminPanel({
                 </button>
               </div>
             </div>
-          ))}
+            ));
+          })()}
         </div>
       )}
 
