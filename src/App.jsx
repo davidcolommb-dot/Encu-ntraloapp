@@ -113,6 +113,29 @@ function computeAwaitingRating(course, rec) {
   return quizOk && caseOk;
 }
 
+// Un checklist de puesto está "completo" cuando la persona ha puesto algún
+// nivel a CADA ítem — no hace falta que todo sea "lo domino", solo que se
+// haya autoevaluado en todos, sin dejarse ninguno sin mirar.
+function isChecklistComplete(puesto, responseEntry) {
+  if (!puesto || !puesto.checklistItems || puesto.checklistItems.length === 0) return true;
+  const responses = responseEntry?.responses || {};
+  return puesto.checklistItems.every((item) => !!responses[item.id]?.level);
+}
+
+// El plazo de un checklist es relativo a cuándo se le asignó el puesto a esa
+// persona en concreto (no una fecha fija para todos, porque cada quien puede
+// empezar en un momento distinto) — solo aplica si el puesto tiene definidos
+// días de plazo.
+function getChecklistDeadlineInfo(employee, puesto, responseEntry) {
+  if (!puesto || !puesto.deadlineDays || !employee.puestoAssignedAt) return { hasDeadline: false, daysLeft: null, overdue: false };
+  const complete = isChecklistComplete(puesto, responseEntry);
+  const assigned = new Date(employee.puestoAssignedAt + "T00:00:00Z");
+  const deadlineDate = new Date(assigned);
+  deadlineDate.setDate(deadlineDate.getDate() + puesto.deadlineDays);
+  const daysLeft = Math.ceil((deadlineDate - new Date()) / 86400000);
+  return { hasDeadline: true, daysLeft, overdue: !complete && daysLeft < 0, complete };
+}
+
 function daysFromNow(n) {
   const d = new Date();
   d.setDate(d.getDate() + n);
@@ -1942,6 +1965,21 @@ function LoginGate({ employees, adminPasswordHash, onEmployeeLogin, onEmployeeCr
 /* ---------- App principal ---------- */
 
 export default function AulaVirtualMB() {
+  // Ancho de ventana calculado en JS, no por CSS con media queries — así el
+  // texto de las pestañas de arriba (Inicio, Alertas...) se decide aquí
+  // mismo, sin depender de que cuadren dos archivos distintos ni de reglas
+  // "!important". Umbral generoso a propósito: cualquier portátil, incluso
+  // uno modesto, debe quedar muy por encima de esto.
+  const [windowWidth, setWindowWidth] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
+  useEffect(() => {
+    function handleResize() {
+      setWindowWidth(window.innerWidth);
+    }
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+  const isCompactHeader = windowWidth < 700;
+
   const [loading, setLoading] = useState(true);
   const [storageError, setStorageError] = useState("");
   const [courses, setCourses] = useState([]);
@@ -1950,6 +1988,8 @@ export default function AulaVirtualMB() {
   const [employees, setEmployees] = useState([]);
   const [groups, setGroups] = useState([]);
   const [paths, setPaths] = useState([]);
+  const [puestos, setPuestos] = useState([]);
+  const [checklistResponses, setChecklistResponses] = useState({});
   const [adminPasswordHash, setAdminPasswordHash] = useState("");
   const [lastBackupAt, setLastBackupAt] = useState(null);
   const [sheetsUrl, setSheetsUrl] = useState("");
@@ -1991,7 +2031,7 @@ export default function AulaVirtualMB() {
 
   useEffect(() => {
     (async () => {
-      const [c, n, emp, grp, pwHash, lastBk, sUrl, pth] = await Promise.all([
+      const [c, n, emp, grp, pwHash, lastBk, sUrl, pth, pst, chkResp] = await Promise.all([
         loadKey("mb_courses", null),
         loadKey("mb_news", null),
         loadKey("mb_employees", []),
@@ -2000,6 +2040,8 @@ export default function AulaVirtualMB() {
         loadKey("mb_last_backup_at", null),
         loadKey("mb_sheets_webapp_url", ""),
         loadKey("mb_paths", []),
+        loadKey("mb_puestos", []),
+        loadKey("mb_checklist_responses", {}),
       ]);
       let finalCourses = c;
       let finalNews = n;
@@ -2033,6 +2075,8 @@ export default function AulaVirtualMB() {
       setLastBackupAt(lastBk);
       setSheetsUrl(sUrl || "");
       setPaths(pth || []);
+      setPuestos(pst || []);
+      setChecklistResponses(chkResp || {});
 
       // Sesión recordada en este navegador: si hay una guardada y sigue siendo válida,
       // entra directamente sin volver a pedir nombre/contraseña.
@@ -2470,6 +2514,83 @@ export default function AulaVirtualMB() {
     await saveKey("mb_paths", updated);
   }
 
+  // Puestos: cada uno lleva su propio checklist de conocimientos/aptitudes/
+  // habilidades. Asignarle un puesto a alguien es opcional — si no tiene, no
+  // le aparece ningún checklist, sin más.
+  async function savePuesto(puesto) {
+    let updated;
+    if (puestos.find((p) => p.id === puesto.id)) updated = puestos.map((p) => (p.id === puesto.id ? puesto : p));
+    else updated = [...puestos, puesto];
+    setPuestos(updated);
+    await saveKey("mb_puestos", updated);
+  }
+  async function deletePuesto(id) {
+    const updated = puestos.filter((p) => p.id !== id);
+    setPuestos(updated);
+    await saveKey("mb_puestos", updated);
+    // A quien tuviera este puesto, se lo quitamos — que no se quede alguien
+    // apuntando a un puesto que ya no existe.
+    const updatedEmployees = employees.map((e) => (e.puestoId === id ? { ...e, puestoId: null, puestoAssignedAt: null } : e));
+    setEmployees(updatedEmployees);
+    await saveKey("mb_employees", updatedEmployees);
+  }
+
+  // Asignar puesto a una persona (o a varias de golpe, para la asignación en
+  // masa). Se guarda también la fecha en que se le asignó — es lo que
+  // permite calcular su plazo individual, ya que cada persona puede empezar
+  // en un momento distinto.
+  async function assignPuesto(employeeNames, puestoId) {
+    const updated = employees.map((e) =>
+      employeeNames.includes(e.name) ? { ...e, puestoId: puestoId || null, puestoAssignedAt: puestoId ? todayISO() : null } : e
+    );
+    setEmployees(updated);
+    await saveKey("mb_employees", updated);
+  }
+
+  // Autoevaluación: la persona marca cada ítem de su checklist con su propio
+  // nivel. Si más adelante un admin o su responsable lo revisa, puede
+  // confirmar ese mismo nivel o ajustarlo — eso lo hace otra función aparte
+  // (validateChecklistItem), para que quede claro quién puso qué.
+  async function setChecklistItemLevel(employeeName, puestoId, itemId, level) {
+    const current = await loadKey("mb_checklist_responses", {});
+    const prevEntry = current[employeeName] || { puestoId, responses: {} };
+    const updated = {
+      ...current,
+      [employeeName]: {
+        ...prevEntry,
+        puestoId,
+        responses: {
+          ...prevEntry.responses,
+          [itemId]: { level, updatedAt: todayISO(), updatedBy: "self", validated: false },
+        },
+        lastUpdated: todayISO(),
+      },
+    };
+    setChecklistResponses(updated);
+    await saveKey("mb_checklist_responses", updated);
+  }
+
+  // Validación de un admin/responsable: confirma o ajusta el nivel que puso
+  // la propia persona. No hace falta esperar a validar todos los ítems de
+  // golpe — se puede ir revisando uno a uno, a su ritmo.
+  async function validateChecklistItem(employeeName, itemId, level) {
+    const current = await loadKey("mb_checklist_responses", {});
+    const prevEntry = current[employeeName];
+    if (!prevEntry) return;
+    const updated = {
+      ...current,
+      [employeeName]: {
+        ...prevEntry,
+        responses: {
+          ...prevEntry.responses,
+          [itemId]: { level, updatedAt: todayISO(), updatedBy: currentUser || "Administrador", validated: true },
+        },
+      },
+    };
+    setChecklistResponses(updated);
+    await saveKey("mb_checklist_responses", updated);
+  }
+
   async function saveSheetsUrl(url) {
     setSheetsUrl(url);
     await saveKey("mb_sheets_webapp_url", url);
@@ -2847,15 +2968,15 @@ export default function AulaVirtualMB() {
     <div style={{ minHeight: "100vh", backgroundColor: "var(--bg-page)", fontFamily: "var(--font-sans)", color: "var(--text-primary)" }}>
       {/* ── HEADER ── */}
       <header style={{ position: "sticky", top: 0, zIndex: 20, backgroundColor: "var(--bg-card)", borderBottom: "1px solid var(--border)" }}>
-        <div className="mb-header-container">
-          <div className="mb-header-inner">
+        <div style={{ maxWidth: 960, margin: "0 auto", padding: isCompactHeader ? "0 8px" : "0 16px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: isCompactHeader ? 52 : 56, gap: isCompactHeader ? 4 : 12 }}>
             {/* Logo + nombre */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-              <img src="/logo-mb.png" alt="Muñoz Bosch" className="mb-logo" />
+              <img src="/logo-mb.png" alt="Muñoz Bosch" style={{ height: isCompactHeader ? 22 : 26, width: "auto" }} />
             </div>
 
             {/* Nav tabs */}
-            <nav className="mb-nav" style={{ display: "flex", alignItems: "center", marginLeft: "auto", flexShrink: 1, overflowX: "auto" }}>
+            <nav style={{ display: "flex", alignItems: "center", gap: isCompactHeader ? 0 : 2, marginRight: isCompactHeader ? 4 : 8, marginLeft: "auto", flexShrink: 1, overflowX: "auto" }}>
               {[
                 { id: "dashboard", label: "Inicio", icon: Home },
                 ...(currentUser ? [{ id: "alerts", label: "Alertas", icon: AlertTriangle, count: alertCount }] : []),
@@ -2866,7 +2987,6 @@ export default function AulaVirtualMB() {
                 return (
                   <button
                     key={t.id}
-                    className="mb-nav-btn"
                     onClick={() => {
                       if (t.id === "catalog" && view !== "course") setSelectedCatalogCategory(null);
                       if (t.id === "routes") setSelectedPathId(null);
@@ -2874,7 +2994,7 @@ export default function AulaVirtualMB() {
                     }}
                     style={{
                       display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
-                      padding: "6px 14px", borderRadius: "var(--radius-md)",
+                      padding: isCompactHeader ? "8px" : "6px 14px", borderRadius: "var(--radius-md)",
                       fontSize: "var(--text-sm)", fontWeight: active ? 600 : 500,
                       color: active ? "var(--brand)" : "var(--text-secondary)",
                       backgroundColor: active ? "var(--brand-soft)" : "transparent",
@@ -2885,7 +3005,7 @@ export default function AulaVirtualMB() {
                     onMouseLeave={(e) => { if (!active) e.currentTarget.style.backgroundColor = "transparent"; }}
                   >
                     <t.icon size={16} />
-                    <span className="mb-nav-label">{t.label}</span>
+                    {!isCompactHeader && <span>{t.label}</span>}
                     {!!t.count && (
                       <span style={{
                         display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -2902,11 +3022,11 @@ export default function AulaVirtualMB() {
             </nav>
 
             {/* User area */}
-            <div className="mb-user-area" style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: isCompactHeader ? 4 : 6, flexShrink: 0 }}>
               {currentUser && (
-                <div className="mb-user-pill" style={{ display: "flex", alignItems: "center", borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: isCompactHeader ? 2 : 6, padding: isCompactHeader ? "2px 4px 2px 2px" : "4px 10px 4px 4px", borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)" }}>
                   <Avatar name={currentUser} size={24} />
-                  <span className="mb-user-name" style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{currentUser.split(" ")[0]}</span>
+                  {!isCompactHeader && <span style={{ fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-primary)" }}>{currentUser.split(" ")[0]}</span>}
                   <button onClick={logout} title="Cerrar sesión" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex", padding: 2 }}>
                     <LogOut size={13} />
                   </button>
@@ -2915,20 +3035,21 @@ export default function AulaVirtualMB() {
               {myManagedGroupIds.length > 0 && (
                 <button
                   onClick={() => setView("team")}
-                  className="mb-role-pill"
                   style={{
-                    display: "flex", alignItems: "center", borderRadius: "var(--radius-full)",
+                    display: "flex", alignItems: "center", gap: isCompactHeader ? 0 : 5, borderRadius: "var(--radius-full)",
+                    padding: isCompactHeader ? "4px 5px" : "4px 8px",
                     backgroundColor: "var(--info-soft)", border: view === "team" ? "1.5px solid var(--info)" : "1.5px solid transparent", cursor: "pointer",
                   }}
                   title="Mi equipo"
                 >
                   <Users size={13} style={{ color: "var(--info)" }} />
-                  <span className="mb-admin-label" style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)" }}>Mi equipo</span>
+                  {!isCompactHeader && <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)" }}>Mi equipo</span>}
                 </button>
               )}
               {isAdmin && (
-                <div className="mb-role-pill" style={{
-                  display: "flex", alignItems: "center", borderRadius: "var(--radius-full)",
+                <div style={{
+                  display: "flex", alignItems: "center", gap: isCompactHeader ? 0 : 5, borderRadius: "var(--radius-full)",
+                  padding: isCompactHeader ? "4px 5px" : "4px 8px",
                   backgroundColor: "var(--brand-soft)", border: view === "admin" ? "1.5px solid var(--brand)" : "1.5px solid transparent",
                 }}>
                   <button
@@ -2937,16 +3058,15 @@ export default function AulaVirtualMB() {
                     title="Ir a Administración"
                   >
                     <ShieldCheck size={13} style={{ color: "var(--brand)" }} />
-                    <span className="mb-admin-label" style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)" }}>Admin</span>
+                    {!isCompactHeader && <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--brand)" }}>Admin</span>}
                   </button>
                   <button onClick={logoutAdmin} title="Salir" style={{ border: "none", background: "none", cursor: "pointer", color: "var(--brand)", display: "flex", padding: 2, opacity: 0.7 }}>
                     <LogOut size={12} />
                   </button>
                 </div>
               )}
-              {isAdmin && !currentUser && (
+              {isAdmin && !currentUser && !isCompactHeader && (
                 <select
-                  className="mb-view-as-select"
                   value=""
                   onChange={(e) => {
                     if (!e.target.value) return;
@@ -3132,6 +3252,10 @@ export default function AulaVirtualMB() {
             paths={paths}
             onSavePath={savePath}
             onDeletePath={deletePath}
+            puestos={puestos}
+            onSavePuesto={savePuesto}
+            onDeletePuesto={deletePuesto}
+            onAssignPuesto={assignPuesto}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
@@ -3170,6 +3294,10 @@ export default function AulaVirtualMB() {
             paths={paths}
             onSavePath={savePath}
             onDeletePath={deletePath}
+            puestos={puestos}
+            onSavePuesto={savePuesto}
+            onDeletePuesto={deletePuesto}
+            onAssignPuesto={assignPuesto}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
@@ -4618,6 +4746,144 @@ function TextInput({ label, value, onChange, placeholder, type = "text" }) {
   );
 }
 
+const CHECKLIST_CATEGORIES = [
+  { id: "conocimiento", label: "Conocimiento", color: "var(--info)" },
+  { id: "aptitud", label: "Aptitud", color: "var(--warning)" },
+  { id: "habilidad", label: "Habilidad", color: "var(--success)" },
+];
+function checklistCategoryMeta(id) {
+  return CHECKLIST_CATEGORIES.find((c) => c.id === id) || CHECKLIST_CATEGORIES[0];
+}
+
+function PuestosAdminTab({ puestos, onSavePuesto, onDeletePuesto }) {
+  const [editingId, setEditingId] = useState(undefined); // undefined = lista, null = nuevo, id = editando
+  const [name, setName] = useState("");
+  const [deadlineDays, setDeadlineDays] = useState("");
+  const [items, setItems] = useState([]);
+  const [newItemText, setNewItemText] = useState("");
+  const [newItemCategory, setNewItemCategory] = useState("conocimiento");
+
+  function startNew() {
+    setEditingId(null);
+    setName("");
+    setDeadlineDays("");
+    setItems([]);
+  }
+  function startEdit(p) {
+    setEditingId(p.id);
+    setName(p.name);
+    setDeadlineDays(p.deadlineDays || "");
+    setItems([...(p.checklistItems || [])]);
+  }
+  function addItem() {
+    if (!newItemText.trim()) return;
+    setItems((prev) => [...prev, { id: uid(), text: newItemText.trim(), category: newItemCategory }]);
+    setNewItemText("");
+  }
+  function removeItem(itemId) {
+    setItems((prev) => prev.filter((i) => i.id !== itemId));
+  }
+
+  if (editingId === undefined) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+        <button
+          onClick={startNew}
+          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", width: "fit-content" }}
+        >
+          <Plus size={15} /> Nuevo puesto
+        </button>
+        {puestos.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay puestos creados todavía. Es opcional — sin puestos, la app sigue funcionando igual.</div>}
+        {puestos.map((p) => (
+          <div key={p.id} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "var(--sp-3)" }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{p.name}</div>
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+                {(p.checklistItems || []).length} ítem{(p.checklistItems || []).length === 1 ? "" : "s"}
+                {p.deadlineDays ? ` · ${p.deadlineDays} días de plazo desde la asignación` : ""}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => startEdit(p)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer" }}>Editar</button>
+              <button onClick={() => onDeletePuesto(p.id)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--danger)", border: "none", background: "none", cursor: "pointer" }}>Eliminar</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)", maxWidth: 640 }}>
+      <button onClick={() => setEditingId(undefined)} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content" }}>
+        <ChevronLeft size={15} /> Puestos
+      </button>
+
+      <TextInput label="Nombre del puesto" value={name} onChange={setName} placeholder="Ej. Almacén — Mozo, Administración..." />
+      <div className="w-52">
+        <TextInput label="Plazo para completarlo (días, opcional)" type="number" value={deadlineDays} onChange={setDeadlineDays} placeholder="Ej. 30 — vacío = sin plazo" />
+      </div>
+
+      <div>
+        <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)" }}>
+          Checklist de conocimientos, aptitudes y habilidades
+        </div>
+        <div style={{ display: "flex", gap: 6, marginBottom: "var(--sp-3)", flexWrap: "wrap" }}>
+          <input
+            value={newItemText}
+            onChange={(e) => setNewItemText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addItem()}
+            placeholder="Ej. Conoce el protocolo de seguridad del almacén"
+            className="flex-1 text-sm rounded-md border px-3 py-2"
+            style={{ borderColor: "#00000020", minWidth: 220 }}
+          />
+          <select value={newItemCategory} onChange={(e) => setNewItemCategory(e.target.value)} className="text-sm rounded-md border px-2 py-2" style={{ borderColor: "#00000020" }}>
+            {CHECKLIST_CATEGORIES.map((c) => (
+              <option key={c.id} value={c.id}>{c.label}</option>
+            ))}
+          </select>
+          <button onClick={addItem} disabled={!newItemText.trim()} style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--brand)", backgroundColor: "var(--bg-card)", border: "1px solid var(--border)", cursor: "pointer", opacity: !newItemText.trim() ? 0.4 : 1 }}>
+            Añadir
+          </button>
+        </div>
+
+        {items.length === 0 ? (
+          <div className="text-xs text-gray-400">Añade al menos un ítem para que el checklist tenga sentido.</div>
+        ) : (
+          CHECKLIST_CATEGORIES.map((cat) => {
+            const catItems = items.filter((i) => i.category === cat.id);
+            if (catItems.length === 0) return null;
+            return (
+              <div key={cat.id} style={{ marginBottom: "var(--sp-3)" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: cat.color, marginBottom: 6 }}>{cat.label.toUpperCase()}</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {catItems.map((item) => (
+                    <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-inset)" }}>
+                      <span style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{item.text}</span>
+                      <button onClick={() => removeItem(item.id)} className="text-red-500 flex-shrink-0"><X size={14} /></button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <button
+        disabled={!name.trim() || items.length === 0}
+        onClick={async () => {
+          await onSavePuesto({ id: editingId || uid(), name: name.trim(), deadlineDays: deadlineDays ? Number(deadlineDays) : null, checklistItems: items });
+          setEditingId(undefined);
+        }}
+        style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: (!name.trim() || items.length === 0) ? 0.4 : 1, width: "fit-content" }}
+      >
+        Guardar puesto
+      </button>
+    </div>
+  );
+}
+
 function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDeletePath, mode = "full" }) {
   const emptyAssignment = { mode: "todos", groupIds: [], employeeNames: [] };
   const [editingId, setEditingId] = useState(undefined); // undefined = lista, null = nueva, id = editando
@@ -4982,6 +5248,10 @@ function AdminPanel({
   paths,
   onSavePath,
   onDeletePath,
+  puestos,
+  onSavePuesto,
+  onDeletePuesto,
+  onAssignPuesto,
   mode = "full",
   restrictToGroupIds = [],
 }) {
@@ -5014,6 +5284,8 @@ function AdminPanel({
   const [editingEmailValue, setEditingEmailValue] = useState("");
   const [editingManagedGroupsFor, setEditingManagedGroupsFor] = useState(null);
   const [employeeSearch, setEmployeeSearch] = useState("");
+  const [selectedForBulk, setSelectedForBulk] = useState(() => new Set());
+  const [bulkPuestoId, setBulkPuestoId] = useState("");
   const [importPreviewRows, setImportPreviewRows] = useState(null);
   const [importFileError, setImportFileError] = useState("");
   const [importing, setImporting] = useState(false);
@@ -5372,7 +5644,7 @@ function AdminPanel({
 
   const TAB_GROUPS = [
     { id: "content", label: "Contenido", icon: LayoutGrid, tabs: ["courses", "editor", "paths", "news"] },
-    { id: "people", label: "Personas", icon: Users, tabs: ["employees", "groups"] },
+    { id: "people", label: "Personas", icon: Users, tabs: ["employees", "groups", "puestos"] },
     { id: "tracking", label: "Seguimiento", icon: ClipboardList, tabs: ["seguimiento", "reviews"] },
     { id: "system", label: "Sistema", icon: Settings, tabs: ["notificaciones", "backup"] },
   ];
@@ -5383,6 +5655,7 @@ function AdminPanel({
     news: "Novedades",
     employees: "Empleados",
     groups: "Grupos",
+    puestos: "Puestos",
     seguimiento: "Seguimiento",
     reviews: "Reseñas",
     notificaciones: "Notificaciones",
@@ -6035,6 +6308,10 @@ function AdminPanel({
         <PathsAdminTab paths={paths} courses={courses} groups={groups} employees={employees} onSavePath={onSavePath} onDeletePath={onDeletePath} mode={mode} />
       )}
 
+      {tab === "puestos" && mode !== "team" && (
+        <PuestosAdminTab puestos={puestos} onSavePuesto={onSavePuesto} onDeletePuesto={onDeletePuesto} />
+      )}
+
       {tab === "news" && mode !== "team" && (
         <div className="space-y-4">
           <div className="rounded-xl border bg-white p-4 space-y-3 shadow-sm" style={{ borderColor: "#00000012" }}>
@@ -6317,6 +6594,37 @@ function AdminPanel({
             )}
           </div>
 
+          {mode !== "team" && puestos.length > 0 && (
+            <div style={{ ...DS.card, padding: "var(--sp-3)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>
+                {selectedForBulk.size > 0 ? `${selectedForBulk.size} seleccionado${selectedForBulk.size === 1 ? "" : "s"}` : "Asignar puesto en masa:"}
+              </span>
+              <select value={bulkPuestoId} onChange={(e) => setBulkPuestoId(e.target.value)} style={{ fontSize: "var(--text-sm)", padding: "6px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>
+                <option value="">Selecciona un puesto...</option>
+                {puestos.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+                <option value="__none__">— Quitar puesto —</option>
+              </select>
+              <button
+                disabled={selectedForBulk.size === 0 || !bulkPuestoId}
+                onClick={async () => {
+                  await onAssignPuesto(Array.from(selectedForBulk), bulkPuestoId === "__none__" ? null : bulkPuestoId);
+                  setSelectedForBulk(new Set());
+                  setBulkPuestoId("");
+                }}
+                style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "6px 14px", color: "white", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: (selectedForBulk.size === 0 || !bulkPuestoId) ? 0.4 : 1 }}
+              >
+                Asignar a los seleccionados
+              </button>
+              {selectedForBulk.size > 0 && (
+                <button onClick={() => setSelectedForBulk(new Set())} style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", border: "none", background: "none", cursor: "pointer" }}>
+                  Deseleccionar todos
+                </button>
+              )}
+            </div>
+          )}
+
           {employees.length > 8 && (
             <input
               value={employeeSearch}
@@ -6334,6 +6642,21 @@ function AdminPanel({
               .map((e) => (
                 <div key={e.name} className="flex items-center justify-between gap-2 rounded-lg border bg-white px-3 py-2 flex-wrap" style={{ borderColor: "#00000012" }}>
                   <div className="flex items-center gap-2 min-w-0">
+                    {mode !== "team" && puestos.length > 0 && (
+                      <input
+                        type="checkbox"
+                        checked={selectedForBulk.has(e.name)}
+                        onChange={() => {
+                          setSelectedForBulk((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(e.name)) next.delete(e.name);
+                            else next.add(e.name);
+                            return next;
+                          });
+                        }}
+                        style={{ flexShrink: 0 }}
+                      />
+                    )}
                     <Avatar name={e.name} size={30} />
                     <div className="min-w-0">
                       {editingNameFor === e.name ? (
@@ -6420,6 +6743,19 @@ function AdminPanel({
                       )}
                     </div>
                     {!e.passwordHash && <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 rounded-full px-2 py-0.5 flex-shrink-0">Sin contraseña todavía</span>}
+                    {mode !== "team" && puestos.length > 0 && (
+                      <select
+                        value={e.puestoId || ""}
+                        onChange={(ev) => onAssignPuesto([e.name], ev.target.value || null)}
+                        title="Puesto asignado"
+                        style={{ fontSize: 10, fontWeight: 600, borderRadius: "var(--radius-full)", padding: "2px 6px", backgroundColor: e.puestoId ? "var(--info-soft)" : "var(--bg-inset)", color: e.puestoId ? "var(--info)" : "var(--text-muted)", border: "none", flexShrink: 0 }}
+                      >
+                        <option value="">Sin puesto</option>
+                        {puestos.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    )}
                     {mode !== "team" && (e.managedGroupIds || []).length > 0 && (
                       <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 flex-shrink-0" style={{ backgroundColor: "var(--brand-soft)", color: "var(--brand)" }}>
                         Responsable de {e.managedGroupIds.length} equipo{e.managedGroupIds.length === 1 ? "" : "s"}
