@@ -2198,7 +2198,7 @@ export default function AulaVirtualMB() {
       setSheetsUrl(sUrl || "");
       setPaths(pth || []);
       let finalPuestos = pst;
-      if (finalPuestos === null) {
+      if (!finalPuestos || finalPuestos.length === 0) {
         finalPuestos = SEED_PUESTOS;
         saveKey("mb_puestos", finalPuestos);
       }
