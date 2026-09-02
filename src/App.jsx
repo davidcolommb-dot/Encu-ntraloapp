@@ -287,6 +287,71 @@ function CopyLinkButton({ url, label = "Copiar enlace", compact = false }) {
 }
 
 
+// Celebración breve al completar de verdad una formación (justo al valorarla,
+// que es el paso que la cierra). Confeti hecho con CSS puro — nada de
+// librerías nuevas para algo tan pequeño. Se cierra sola a los pocos segundos,
+// o si la persona pincha fuera.
+function CelebrationOverlay({ celebration, onClose }) {
+  useEffect(() => {
+    if (!celebration) return;
+    const t = setTimeout(onClose, 3200);
+    return () => clearTimeout(t);
+  }, [celebration]);
+
+  if (!celebration) return null;
+
+  const confettiColors = ["#E9312B", "#C9A227", "#2E7D6A", "#3E7C96", "#2D8A4E"];
+  const pieces = Array.from({ length: 36 }, (_, i) => ({
+    left: Math.random() * 100,
+    delay: Math.random() * 0.4,
+    duration: 1.8 + Math.random() * 1.2,
+    color: confettiColors[i % confettiColors.length],
+    rotate: Math.random() * 360,
+    size: 6 + Math.random() * 6,
+  }));
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center",
+        backgroundColor: "rgba(26,24,22,0.35)", cursor: "pointer", overflow: "hidden",
+      }}
+    >
+      {pieces.map((p, i) => (
+        <span
+          key={i}
+          style={{
+            position: "absolute", top: -20, left: `${p.left}%`,
+            width: p.size, height: p.size * 0.4, backgroundColor: p.color,
+            transform: `rotate(${p.rotate}deg)`, borderRadius: 2,
+            animation: `mb-confetti-fall ${p.duration}s ${p.delay}s ease-in forwards`,
+          }}
+        />
+      ))}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          ...DS.card, padding: "var(--sp-8) var(--sp-6)", textAlign: "center", maxWidth: 320,
+          display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--sp-3)",
+          animation: "mb-celebration-pop 0.4s var(--ease-out)",
+        }}
+      >
+        <div style={{ width: 64, height: 64, borderRadius: "var(--radius-full)", backgroundColor: "var(--success-soft)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <PartyPopper size={30} style={{ color: "var(--success)" }} />
+        </div>
+        <div>
+          <div style={{ fontSize: "var(--text-lg)", fontWeight: 700, color: "var(--text-primary)" }}>¡Formación completada!</div>
+          <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginTop: 4 }}>{celebration.title}</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--warning)" }}>
+          <Trophy size={16} /> +100 puntos
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function isAssignedToUser(course, userName, groups) {
   const a = course.assignment;
   if (!a) return true;
@@ -1507,6 +1572,7 @@ export default function AulaVirtualMB() {
   const [quizResult, setQuizResult] = useState(null);
   const [pendingDeepLink, setPendingDeepLink] = useState(null);
   const [deepLinkError, setDeepLinkError] = useState("");
+  const [celebration, setCelebration] = useState(null);
 
   // Enlace directo a una formación o ruta: se lee de la URL una sola vez, al
   // cargar la página — antes de que la persona haya iniciado sesión siquiera.
@@ -1792,6 +1858,10 @@ export default function AulaVirtualMB() {
     };
     setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
     await saveKey(`mb_completions_course_${courseId}`, updated);
+    if (wasAwaiting) {
+      const course = courses.find((c) => c.id === courseId);
+      setCelebration({ title: course?.title || "Formación completada" });
+    }
   }
 
   async function manualSetStatus(courseId, employeeName, status) {
@@ -2654,6 +2724,7 @@ export default function AulaVirtualMB() {
           />
         )}
       </main>
+      <CelebrationOverlay celebration={celebration} onClose={() => setCelebration(null)} />
     </div>
   );
 }
