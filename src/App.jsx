@@ -3,7 +3,7 @@ import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
   Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp, ChevronRight,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
-  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check, Eye
+  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check, Eye, BookOpen, Sparkles, Wrench, Archive
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { PublicClientApplication } from "@azure/msal-browser";
@@ -387,6 +387,9 @@ function CelebrationOverlay({ celebration, onClose }) {
 }
 
 function isAssignedToUser(course, userName, groups) {
+  // Una formación archivada no le llega a nadie, aunque en teoría le tocara
+  // por su asignación — archivar la quita de en medio sin borrar nada.
+  if (course.archived) return false;
   const a = course.assignment;
   if (!a) return true;
   // Nombres añadidos automáticamente (p. ej. por la ruta de bienvenida al dar de
@@ -440,7 +443,7 @@ function computeEmployeeCompliance(employees, courses, groups, completionsByCour
 // Panel de cumplimiento reutilizable: lo usan tanto el Admin completo (con
 // todos los empleados) como el panel "Mi equipo" de un responsable (con solo
 // los suyos) — misma calidad de herramienta para los dos casos.
-function ComplianceView({ employees, courses, groups, completionsByCourse, onMarkFormReviewed }) {
+function ComplianceView({ employees, courses, groups, completionsByCourse, onMarkFormReviewed, puestos = [], checklistResponses = {}, onValidateChecklistItem }) {
   const [viewMode, setViewMode] = useState("person"); // "person" | "course"
   const [personSearch, setPersonSearch] = useState("");
   const [personSort, setPersonSort] = useState("overdue");
@@ -521,11 +524,12 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
         </div>
       </div>
 
-      {/* Alternar entre ver por persona o por formación */}
-      <div style={{ display: "flex", gap: 4 }}>
+      {/* Alternar entre ver por persona, por formación, o por checklist de puesto */}
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
         {[
           { id: "person", label: "Por persona" },
           { id: "course", label: "Por formación" },
+          ...(puestos.length > 0 ? [{ id: "checklist", label: "Checklists de puesto" }] : []),
         ].map((m) => (
           <button
             key={m.id}
@@ -623,7 +627,7 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
             </div>
           )}
         </div>
-      ) : (
+      ) : viewMode === "course" ? (
         <div>
           <select
             value={selectedCourseId}
@@ -692,7 +696,87 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
             </div>
           )}
         </div>
-      )}
+      ) : viewMode === "checklist" ? (
+        <div>
+          {(() => {
+            const employeesWithPuesto = employees
+              .map((e) => ({ employee: e, puesto: puestos.find((p) => p.id === e.puestoId) }))
+              .filter((x) => !!x.puesto);
+            if (employeesWithPuesto.length === 0) {
+              return <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Nadie tiene un puesto con checklist asignado todavía.</div>;
+            }
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+                {employeesWithPuesto.map(({ employee, puesto }) => {
+                  const entry = checklistResponses[employee.name];
+                  const responses = entry?.responses || {};
+                  const answered = puesto.checklistItems.filter((i) => !!responses[i.id]?.level).length;
+                  const pendingValidation = puesto.checklistItems.filter((i) => responses[i.id]?.level && !responses[i.id]?.validated).length;
+                  const key = employee.name;
+                  const isExpanded = expandedPerson === `checklist:${key}`;
+                  return (
+                    <div key={key} style={{ ...DS.card, overflow: "hidden" }}>
+                      <button
+                        onClick={() => setExpandedPerson(isExpanded ? null : `checklist:${key}`)}
+                        style={{ width: "100%", display: "flex", alignItems: "center", gap: "var(--sp-3)", padding: "var(--sp-3)", border: "none", background: "none", cursor: "pointer", textAlign: "left" }}
+                      >
+                        <Avatar name={employee.name} size={30} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{employee.name}</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{puesto.name} · {answered}/{puesto.checklistItems.length} autoevaluados</div>
+                        </div>
+                        {pendingValidation > 0 && <StatusPill icon={ShieldCheck} label={`${pendingValidation} por confirmar`} variant="warning" />}
+                        {isExpanded ? <ChevronUp size={16} style={{ color: "var(--text-muted)" }} /> : <ChevronDown size={16} style={{ color: "var(--text-muted)" }} />}
+                      </button>
+                      {isExpanded && (
+                        <div style={{ padding: "0 var(--sp-3) var(--sp-3)", display: "flex", flexDirection: "column", gap: 6 }}>
+                          {puesto.checklistItems.map((item) => {
+                            const resp = responses[item.id];
+                            return (
+                              <div key={item.id} style={{ padding: "8px 10px", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-inset)" }}>
+                                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-primary)", marginBottom: 6 }}>{item.text}</div>
+                                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+                                  {CHECKLIST_LEVELS.map((lvl) => {
+                                    const selected = resp?.level === lvl.id;
+                                    return (
+                                      <button
+                                        key={lvl.id}
+                                        onClick={() => onValidateChecklistItem(employee.name, item.id, lvl.id)}
+                                        style={{
+                                          display: "flex", alignItems: "center", gap: 3, fontSize: 10, fontWeight: 600,
+                                          padding: "3px 8px", borderRadius: "var(--radius-full)", cursor: "pointer",
+                                          border: selected ? "1.5px solid transparent" : "1.5px solid var(--border)",
+                                          backgroundColor: selected ? `var(--${lvl.variant})` : "var(--bg-card)",
+                                          color: selected ? "white" : "var(--text-secondary)",
+                                        }}
+                                      >
+                                        <lvl.icon size={10} /> {lvl.label}
+                                      </button>
+                                    );
+                                  })}
+                                  {!resp?.level ? (
+                                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Sin autoevaluar todavía</span>
+                                  ) : resp.validated ? (
+                                    <span style={{ fontSize: 10, fontWeight: 600, color: "var(--info)", display: "flex", alignItems: "center", gap: 3 }}>
+                                      <ShieldCheck size={10} /> Confirmado por {resp.updatedBy}
+                                    </span>
+                                  ) : (
+                                    <span style={{ fontSize: 10, color: "var(--warning)", fontWeight: 600 }}>Pendiente de confirmar</span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -727,6 +811,44 @@ function getFormEmbedUrl(url) {
     return url;
   }
 }
+
+// Puesto de ejemplo, construido a partir de un plan de acogida real de
+// Picker de Salidas (formación PRL, maquinaria, PDA, casuísticas de pedidos,
+// y el propio checklist de calidad que ya usan en el almacén). Sirve como
+// ejemplo de partida — se puede editar o borrar libremente desde Admin →
+// Puestos, igual que con las formaciones de ejemplo.
+const SEED_PUESTOS = [
+  {
+    id: "seed-puesto-picker-salidas",
+    name: "[Ejemplo] Picker de Salidas — Almacén",
+    deadlineDays: 15,
+    checklistItems: [
+      // Conocimiento
+      { id: "spk-c1", category: "conocimiento", text: "Conoce el sistema de fichajes: cómo y cuándo fichar" },
+      { id: "spk-c2", category: "conocimiento", text: "Conoce la organización logística del almacén: estructura, flujos y funcionamiento del equipo" },
+      { id: "spk-c3", category: "conocimiento", text: "Ha completado la formación PRL obligatoria y su test" },
+      { id: "spk-c4", category: "conocimiento", text: "Sabe cómo se organizan las playas y naves: dónde va la agencia, la mensajería y la ruta" },
+      { id: "spk-c5", category: "conocimiento", text: "Conoce el sistema de objetivos e incentivos del picker, y cómo se miden" },
+      { id: "spk-c6", category: "conocimiento", text: "Conoce el procedimiento de faltas de otros almacenes (Constitución, Martorell)" },
+      // Habilidad
+      { id: "spk-h1", category: "habilidad", text: "Domina el proceso completo de preparación de pedidos: metodología, orden de trabajo y herramientas" },
+      { id: "spk-h2", category: "habilidad", text: "Sabe conducir y manejar la maquinaria (preparadoras) con soltura y de forma segura" },
+      { id: "spk-h3", category: "habilidad", text: "Maneja la PDA: navegación básica, lectura de pedidos y confirmación de líneas" },
+      { id: "spk-h4", category: "habilidad", text: "Sabe clasificar la tipología de producto y montar un palé de forma estable y optimizada" },
+      { id: "spk-h5", category: "habilidad", text: "Usa correctamente la etiquetadora y la flejadora" },
+      { id: "spk-h6", category: "habilidad", text: "Resuelve con soltura la casuística de Mensajería / Amazon / Makro" },
+      { id: "spk-h7", category: "habilidad", text: "Resuelve con soltura la casuística de Agencia estándar" },
+      { id: "spk-h8", category: "habilidad", text: "Resuelve con soltura la casuística de Ruta (con y sin camión)" },
+      { id: "spk-h9", category: "habilidad", text: "Aplica correctamente el checklist de calidad al montar un pedido (trazabilidad, producto, palé, etiquetado y embalaje)" },
+      // Aptitud
+      { id: "spk-a1", category: "aptitud", text: "Cumple los turnos y estándares de orden y limpieza (rutinas QR) sin necesidad de recordatorio" },
+      { id: "spk-a2", category: "aptitud", text: "Aplica las buenas prácticas de calidad y eficiencia del almacén de forma constante, no solo cuando le supervisan" },
+      { id: "spk-a3", category: "aptitud", text: "Es capaz de trabajar de forma autónoma, sabiendo cuándo pedir ayuda a su responsable" },
+      { id: "spk-a4", category: "aptitud", text: "Muestra ritmo de aprendizaje adecuado y pide ayuda ante dudas en vez de arriesgarse a fallar" },
+    ],
+  },
+];
+
 
 const SEED_COURSES = [
   {
@@ -2040,7 +2162,7 @@ export default function AulaVirtualMB() {
         loadKey("mb_last_backup_at", null),
         loadKey("mb_sheets_webapp_url", ""),
         loadKey("mb_paths", []),
-        loadKey("mb_puestos", []),
+        loadKey("mb_puestos", null),
         loadKey("mb_checklist_responses", {}),
       ]);
       let finalCourses = c;
@@ -2075,7 +2197,12 @@ export default function AulaVirtualMB() {
       setLastBackupAt(lastBk);
       setSheetsUrl(sUrl || "");
       setPaths(pth || []);
-      setPuestos(pst || []);
+      let finalPuestos = pst;
+      if (finalPuestos === null) {
+        finalPuestos = SEED_PUESTOS;
+        saveKey("mb_puestos", finalPuestos);
+      }
+      setPuestos(finalPuestos);
       setChecklistResponses(chkResp || {});
 
       // Sesión recordada en este navegador: si hay una guardada y sigue siendo válida,
@@ -2853,6 +2980,16 @@ export default function AulaVirtualMB() {
     setCourses(updated);
     await saveKey("mb_courses", updated);
   }
+  // Archivar una formación la quita de en medio (catálogo, alertas, listado
+  // normal de Admin) sin borrar nada de verdad — ni el progreso de la gente,
+  // ni los adjuntos. Cualquiera con acceso al editor puede archivar o
+  // desarchivar; borrar de verdad es solo para el administrador completo.
+  async function setCourseArchived(id, archived) {
+    const updated = courses.map((c) => (c.id === id ? { ...c, archived } : c));
+    setCourses(updated);
+    await saveKey("mb_courses", updated);
+  }
+
   async function deleteCourse(id) {
     const course = courses.find((c) => c.id === id);
     if (course?.attachments) {
@@ -3272,6 +3409,7 @@ export default function AulaVirtualMB() {
             onLoadTracking={loadAllCompletionsForTracking}
             onSaveCourse={saveCourse}
             onDeleteCourse={deleteCourse}
+            onSetCourseArchived={setCourseArchived}
             onAddNews={addNews}
             onUpdateNews={updateNews}
             onDeleteNews={deleteNews}
@@ -3287,6 +3425,8 @@ export default function AulaVirtualMB() {
             onSavePuesto={savePuesto}
             onDeletePuesto={deletePuesto}
             onAssignPuesto={assignPuesto}
+            checklistResponses={checklistResponses}
+            onValidateChecklistItem={validateChecklistItem}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
@@ -3314,6 +3454,7 @@ export default function AulaVirtualMB() {
             onLoadTracking={loadAllCompletionsForTracking}
             onSaveCourse={saveCourse}
             onDeleteCourse={deleteCourse}
+            onSetCourseArchived={setCourseArchived}
             onAddNews={addNews}
             onUpdateNews={updateNews}
             onDeleteNews={deleteNews}
@@ -3329,6 +3470,8 @@ export default function AulaVirtualMB() {
             onSavePuesto={savePuesto}
             onDeletePuesto={deletePuesto}
             onAssignPuesto={assignPuesto}
+            checklistResponses={checklistResponses}
+            onValidateChecklistItem={validateChecklistItem}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
@@ -3921,7 +4064,7 @@ function MyChecklistView({ puesto, employee, responseEntry, onSetLevel }) {
   const deadlineInfo = getChecklistDeadlineInfo(employee, puesto, responseEntry);
 
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div style={{ maxWidth: 760 }}>
       <div style={{ marginBottom: "var(--sp-4)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
           <ClipboardList size={20} style={{ color: "var(--success)" }} />
@@ -3941,28 +4084,58 @@ function MyChecklistView({ puesto, employee, responseEntry, onSetLevel }) {
         )}
       </div>
 
-      <div style={{ ...DS.card, padding: "var(--sp-4)", marginBottom: "var(--sp-5)" }}>
+      {/* Resumen visual: progreso general + una tarjeta por categoría */}
+      <div style={{ ...DS.card, padding: "var(--sp-4)", marginBottom: "var(--sp-4)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
           <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{answeredCount}/{total} autoevaluados</span>
           <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--brand)" }}>{percent}%</span>
         </div>
         <div style={{ height: 8, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${percent}%`, backgroundColor: percent === 100 ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)" }} />
+          <div style={{ height: "100%", width: `${percent}%`, backgroundColor: percent === 100 ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)", transition: "width 0.4s var(--ease-out)" }} />
         </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "var(--sp-3)", marginBottom: "var(--sp-6)" }}>
+        {CHECKLIST_CATEGORIES.map((cat) => {
+          const catItems = puesto.checklistItems.filter((i) => i.category === cat.id);
+          if (catItems.length === 0) return null;
+          const catAnswered = catItems.filter((i) => !!responses[i.id]?.level).length;
+          const catDomina = catItems.filter((i) => responses[i.id]?.level === "domina").length;
+          const catPercent = catItems.length ? Math.round((catAnswered / catItems.length) * 100) : 0;
+          return (
+            <div key={cat.id} style={{ ...DS.card, padding: "var(--sp-3)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                <div style={{ width: 26, height: 26, borderRadius: "var(--radius-md)", backgroundColor: cat.soft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                  <cat.icon size={13} style={{ color: cat.color }} />
+                </div>
+                <span style={{ fontSize: "var(--text-xs)", fontWeight: 700, color: cat.color }}>{cat.label.toUpperCase()}</span>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>{catDomina}/{catItems.length} dominados</div>
+              <div style={{ height: 5, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${catPercent}%`, backgroundColor: cat.color, borderRadius: "var(--radius-full)" }} />
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       {CHECKLIST_CATEGORIES.map((cat) => {
         const catItems = puesto.checklistItems.filter((i) => i.category === cat.id);
         if (catItems.length === 0) return null;
         return (
-          <div key={cat.id} style={{ marginBottom: "var(--sp-5)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: cat.color, marginBottom: "var(--sp-2)" }}>{cat.label.toUpperCase()}</div>
+          <div key={cat.id} style={{ marginBottom: "var(--sp-6)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "var(--sp-3)" }}>
+              <div style={{ width: 30, height: 30, borderRadius: "var(--radius-md)", backgroundColor: cat.soft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                <cat.icon size={15} style={{ color: cat.color }} />
+              </div>
+              <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: cat.color }}>{cat.label.toUpperCase()}</span>
+            </div>
             <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
               {catItems.map((item) => {
                 const resp = responses[item.id];
                 return (
-                  <div key={item.id} style={{ ...DS.card, padding: "var(--sp-3)" }}>
-                    <div style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", marginBottom: 8 }}>{item.text}</div>
+                  <div key={item.id} style={{ ...DS.card, padding: "var(--sp-3) var(--sp-3) var(--sp-3) var(--sp-4)", borderLeft: `4px solid ${cat.color}` }}>
+                    <div style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", marginBottom: 10, lineHeight: 1.4 }}>{item.text}</div>
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                       {CHECKLIST_LEVELS.map((lvl) => {
                         const selected = resp?.level === lvl.id;
@@ -3971,14 +4144,15 @@ function MyChecklistView({ puesto, employee, responseEntry, onSetLevel }) {
                             key={lvl.id}
                             onClick={() => onSetLevel(item.id, lvl.id)}
                             style={{
-                              display: "flex", alignItems: "center", gap: 4, fontSize: 12, fontWeight: 600,
-                              padding: "5px 10px", borderRadius: "var(--radius-full)", cursor: "pointer",
+                              display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600,
+                              padding: "6px 12px", borderRadius: "var(--radius-full)", cursor: "pointer",
                               border: selected ? "1.5px solid transparent" : "1.5px solid var(--border)",
                               backgroundColor: selected ? `var(--${lvl.variant})` : "var(--bg-card)",
                               color: selected ? "white" : "var(--text-secondary)",
+                              transition: "all var(--dur-fast) var(--ease-out)",
                             }}
                           >
-                            <lvl.icon size={11} /> {lvl.label}
+                            <lvl.icon size={12} /> {lvl.label}
                           </button>
                         );
                       })}
@@ -4138,7 +4312,7 @@ function CategoryPicker({ onSelectCategory }) {
 function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory, paths = [], onOpenPath }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses;
+  const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses.filter((c) => !c.archived);
 
   // Mapa courseId -> título de la primera ruta a la que pertenece (si alguna),
   // para la etiqueta "Parte de la ruta: ..." en las tarjetas.
@@ -4871,9 +5045,9 @@ function TextInput({ label, value, onChange, placeholder, type = "text" }) {
 }
 
 const CHECKLIST_CATEGORIES = [
-  { id: "conocimiento", label: "Conocimiento", color: "var(--info)" },
-  { id: "aptitud", label: "Aptitud", color: "var(--warning)" },
-  { id: "habilidad", label: "Habilidad", color: "var(--success)" },
+  { id: "conocimiento", label: "Conocimiento", color: "var(--info)", soft: "var(--info-soft)", icon: BookOpen },
+  { id: "aptitud", label: "Aptitud", color: "var(--warning)", soft: "var(--warning-soft)", icon: Sparkles },
+  { id: "habilidad", label: "Habilidad", color: "var(--success)", soft: "var(--success-soft)", icon: Wrench },
 ];
 function checklistCategoryMeta(id) {
   return CHECKLIST_CATEGORIES.find((c) => c.id === id) || CHECKLIST_CATEGORIES[0];
@@ -5352,6 +5526,7 @@ function AdminPanel({
   onLoadTracking,
   onSaveCourse,
   onDeleteCourse,
+  onSetCourseArchived,
   onAddNews,
   onUpdateNews,
   onDeleteNews,
@@ -5376,6 +5551,8 @@ function AdminPanel({
   onSavePuesto,
   onDeletePuesto,
   onAssignPuesto,
+  checklistResponses,
+  onValidateChecklistItem,
   mode = "full",
   restrictToGroupIds = [],
 }) {
@@ -5648,6 +5825,8 @@ function AdminPanel({
   const [showPreview, setShowPreview] = useState(false);
   const [courseListSearch, setCourseListSearch] = useState("");
   const [courseListCategoryFilter, setCourseListCategoryFilter] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   function handleSaveClick() {
     const warnings = getContentWarnings();
     if (warnings.length > 0) setPendingWarnings(warnings);
@@ -5925,38 +6104,87 @@ function AdminPanel({
           )}
           {courses.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay formaciones todavía.</div>}
           {(() => {
+            const archivedCount = courses.filter((c) => c.archived).length;
             const filtered = courses.filter(
               (c) =>
+                !!c.archived === showArchived &&
                 (!courseListCategoryFilter || c.category === courseListCategoryFilter) &&
                 (!courseListSearch.trim() || c.title.toLowerCase().includes(courseListSearch.trim().toLowerCase()))
             );
-            if (courses.length > 0 && filtered.length === 0) {
-              return <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Ninguna formación coincide con la búsqueda.</div>;
-            }
-            return filtered.map((c) => (
-            <div key={c.id} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "var(--sp-3)", flexWrap: "wrap" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
-                <CategoryTag id={c.category} small />
-                <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
-                {avgRatingByCourse[c.id] && (
-                  <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 600, color: "var(--warning)", flexShrink: 0 }} title={`${avgRatingByCourse[c.id].count} valoración${avgRatingByCourse[c.id].count === 1 ? "" : "es"}`}>
-                    <Star size={11} fill="var(--warning)" /> {avgRatingByCourse[c.id].avg.toFixed(1)}
-                  </span>
+            return (
+              <>
+                {archivedCount > 0 && (
+                  <button
+                    onClick={() => setShowArchived((v) => !v)}
+                    style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", border: "none", background: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, width: "fit-content", marginBottom: "var(--sp-2)" }}
+                  >
+                    {showArchived ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    {showArchived ? "Ocultar archivadas" : `Ver archivadas (${archivedCount})`}
+                  </button>
                 )}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                <div style={{ marginRight: 8 }}>
-                  <CopyLinkButton url={buildShareLink("course", c.id)} compact />
-                </div>
-                <button onClick={() => loadDraft(c)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--info)", background: "none", border: "none", cursor: "pointer" }}>
-                  Editar
-                </button>
-                <button onClick={() => onDeleteCourse(c.id)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--danger)", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
-                  <Trash2 size={13} /> Eliminar
-                </button>
-              </div>
-            </div>
-            ));
+                {filtered.length === 0 ? (
+                  <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+                    {showArchived ? "No hay formaciones archivadas." : "Ninguna formación coincide con la búsqueda."}
+                  </div>
+                ) : (
+                  filtered.map((c) => (
+                    <div key={c.id} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "var(--sp-3)", flexWrap: "wrap", opacity: c.archived ? 0.6 : 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
+                        <CategoryTag id={c.category} small />
+                        <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.title}</div>
+                        {avgRatingByCourse[c.id] && (
+                          <span style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, fontWeight: 600, color: "var(--warning)", flexShrink: 0 }} title={`${avgRatingByCourse[c.id].count} valoración${avgRatingByCourse[c.id].count === 1 ? "" : "es"}`}>
+                            <Star size={11} fill="var(--warning)" /> {avgRatingByCourse[c.id].avg.toFixed(1)}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                        {confirmDeleteId === c.id ? (
+                          <>
+                            <span style={{ fontSize: "var(--text-xs)", color: "var(--danger)", fontWeight: 600, marginRight: 2 }}>¿Eliminar del todo?</span>
+                            <button
+                              onClick={() => {
+                                onDeleteCourse(c.id);
+                                setConfirmDeleteId(null);
+                              }}
+                              style={{ fontSize: "var(--text-xs)", fontWeight: 700, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "white", backgroundColor: "var(--danger)", border: "none", cursor: "pointer" }}
+                            >
+                              Sí, eliminar
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--text-secondary)", background: "none", border: "1px solid var(--border)", cursor: "pointer" }}
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ marginRight: 8 }}>
+                              <CopyLinkButton url={buildShareLink("course", c.id)} compact />
+                            </div>
+                            <button onClick={() => loadDraft(c)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--info)", background: "none", border: "none", cursor: "pointer" }}>
+                              Editar
+                            </button>
+                            <button
+                              onClick={() => onSetCourseArchived(c.id, !c.archived)}
+                              style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--warning)", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                            >
+                              <Archive size={13} /> {c.archived ? "Desarchivar" : "Archivar"}
+                            </button>
+                            {mode !== "team" && (
+                              <button onClick={() => setConfirmDeleteId(c.id)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--danger)", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                                <Trash2 size={13} /> Eliminar
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </>
+            );
           })()}
         </div>
       )}
@@ -7107,7 +7335,7 @@ function AdminPanel({
           )}
 
           <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
-            <ComplianceView employees={employees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} />
+            <ComplianceView employees={employees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} />
           </div>
         </div>
       )}
@@ -7181,7 +7409,7 @@ function AdminPanel({
             <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-3)" }}>
               Cumplimiento de tu equipo
             </div>
-            <ComplianceView employees={teamEmployees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} />
+            <ComplianceView employees={teamEmployees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} />
           </div>
         </div>
       )}
