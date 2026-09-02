@@ -368,6 +368,258 @@ function isAssignedToUser(course, userName, groups) {
   return true;
 }
 
+// Cumplimiento de cada persona: cuántas formaciones tiene asignadas, cuántas
+// completó de verdad (teniendo en cuenta la caducidad — si una formación
+// caducó, deja de contar como completada), y cuántas tiene vencidas ahora
+// mismo. Es la base tanto del panel de Admin como del de "Mi equipo".
+function computeEmployeeCompliance(employees, courses, groups, completionsByCourse) {
+  return employees.map((emp) => {
+    let totalAssigned = 0, completed = 0, overdueCount = 0;
+    const courseDetails = [];
+    for (const c of courses) {
+      if (!isAssignedToUser(c, emp.name, groups)) continue;
+      totalAssigned++;
+      const rec = completionsByCourse[c.id]?.[emp.name];
+      const rawDone = rec?.status === "completada";
+      const expired = rawDone && isCourseExpired(c, rec);
+      const done = rawDone && !expired;
+      const overdue = !done && c.deadline && daysUntil(c.deadline) < 0;
+      if (done) completed++;
+      if (overdue) overdueCount++;
+      courseDetails.push({ course: c, record: rec, done, overdue, expired });
+    }
+    const percent = totalAssigned > 0 ? Math.round((completed / totalAssigned) * 100) : 100;
+    return { employee: emp, totalAssigned, completed, overdueCount, percent, courseDetails };
+  });
+}
+
+// Panel de cumplimiento reutilizable: lo usan tanto el Admin completo (con
+// todos los empleados) como el panel "Mi equipo" de un responsable (con solo
+// los suyos) — misma calidad de herramienta para los dos casos.
+function ComplianceView({ employees, courses, groups, completionsByCourse }) {
+  const [viewMode, setViewMode] = useState("person"); // "person" | "course"
+  const [personSearch, setPersonSearch] = useState("");
+  const [personSort, setPersonSort] = useState("overdue");
+  const [expandedPerson, setExpandedPerson] = useState(null);
+  const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [courseSearch, setCourseSearch] = useState("");
+
+  const compliance = useMemo(
+    () => computeEmployeeCompliance(employees, courses, groups, completionsByCourse),
+    [employees, courses, groups, completionsByCourse]
+  );
+
+  const overallStats = useMemo(() => {
+    const totalOverdue = compliance.reduce((sum, c) => sum + c.overdueCount, 0);
+    const avgPercent = compliance.length ? Math.round(compliance.reduce((sum, c) => sum + c.percent, 0) / compliance.length) : 0;
+    const upToDate = compliance.filter((c) => c.percent === 100).length;
+    return { totalOverdue, avgPercent, upToDate };
+  }, [compliance]);
+
+  const filteredSorted = useMemo(() => {
+    let list = compliance.filter((c) => c.employee.name.toLowerCase().includes(personSearch.trim().toLowerCase()));
+    if (personSort === "name") list = [...list].sort((a, b) => a.employee.name.localeCompare(b.employee.name));
+    else if (personSort === "compliance") list = [...list].sort((a, b) => a.percent - b.percent);
+    else list = [...list].sort((a, b) => b.overdueCount - a.overdueCount || a.percent - b.percent);
+    return list;
+  }, [compliance, personSearch, personSort]);
+
+  const selectedCourse = courses.find((c) => c.id === selectedCourseId);
+  const courseRows = useMemo(() => {
+    if (!selectedCourse) return [];
+    return employees
+      .filter((e) => isAssignedToUser(selectedCourse, e.name, groups))
+      .filter((e) => e.name.toLowerCase().includes(courseSearch.trim().toLowerCase()))
+      .map((e) => {
+        const rec = completionsByCourse[selectedCourse.id]?.[e.name];
+        const rawDone = rec?.status === "completada";
+        const expired = rawDone && isCourseExpired(selectedCourse, rec);
+        const done = rawDone && !expired;
+        const overdue = !done && selectedCourse.deadline && daysUntil(selectedCourse.deadline) < 0;
+        return { employee: e, record: rec, done, overdue, expired };
+      });
+  }, [selectedCourse, employees, groups, completionsByCourse, courseSearch]);
+  const courseDoneCount = courseRows.filter((r) => r.done).length;
+  const coursePercent = courseRows.length ? Math.round((courseDoneCount / courseRows.length) * 100) : 0;
+
+  if (employees.length === 0) {
+    return <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Todavía no hay nadie que seguir aquí.</div>;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
+      {/* Resumen visual de un vistazo */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--sp-3)" }}>
+        <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
+          <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--brand)" }}>{overallStats.avgPercent}%</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Cumplimiento medio</div>
+        </div>
+        <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
+          <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--success)" }}>{overallStats.upToDate}</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Personas al día del todo</div>
+        </div>
+        <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
+          <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: overallStats.totalOverdue > 0 ? "var(--danger)" : "var(--text-muted)" }}>{overallStats.totalOverdue}</div>
+          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Formaciones vencidas (total)</div>
+        </div>
+      </div>
+
+      {/* Alternar entre ver por persona o por formación */}
+      <div style={{ display: "flex", gap: 4 }}>
+        {[
+          { id: "person", label: "Por persona" },
+          { id: "course", label: "Por formación" },
+        ].map((m) => (
+          <button
+            key={m.id}
+            onClick={() => setViewMode(m.id)}
+            style={{
+              fontSize: "var(--text-sm)", fontWeight: viewMode === m.id ? 600 : 500,
+              padding: "6px 14px", borderRadius: "var(--radius-full)",
+              color: viewMode === m.id ? "white" : "var(--text-secondary)",
+              backgroundColor: viewMode === m.id ? "var(--brand)" : "var(--bg-inset)",
+              border: "none", cursor: "pointer",
+            }}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      {viewMode === "person" ? (
+        <div>
+          <div style={{ display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", marginBottom: "var(--sp-3)" }}>
+            <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
+              <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+              <input
+                value={personSearch}
+                onChange={(e) => setPersonSearch(e.target.value)}
+                placeholder="Buscar por nombre..."
+                style={{ width: "100%", padding: "7px 10px 7px 32px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)" }}
+              />
+            </div>
+            <select
+              value={personSort}
+              onChange={(e) => setPersonSort(e.target.value)}
+              style={{ padding: "7px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)", color: "var(--text-primary)" }}
+            >
+              <option value="overdue">Vencidas primero</option>
+              <option value="compliance">Menor cumplimiento primero</option>
+              <option value="name">Nombre (A-Z)</option>
+            </select>
+          </div>
+
+          {filteredSorted.length === 0 ? (
+            <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Nadie coincide con esa búsqueda.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+              {filteredSorted.map((c) => {
+                const isExpanded = expandedPerson === c.employee.name;
+                return (
+                  <div key={c.employee.name} style={{ ...DS.card, overflow: "hidden" }}>
+                    <button
+                      onClick={() => setExpandedPerson(isExpanded ? null : c.employee.name)}
+                      style={{ width: "100%", display: "flex", alignItems: "center", gap: "var(--sp-3)", padding: "var(--sp-3)", border: "none", background: "none", cursor: "pointer", textAlign: "left" }}
+                    >
+                      <Avatar name={c.employee.name} size={30} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{c.employee.name}</div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 3 }}>
+                          <div style={{ width: 80, height: 5, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+                            <div style={{ height: "100%", width: `${c.percent}%`, backgroundColor: c.percent === 100 ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)" }} />
+                          </div>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{c.completed}/{c.totalAssigned} · {c.percent}%</span>
+                        </div>
+                      </div>
+                      {c.overdueCount > 0 && <StatusPill icon={AlertTriangle} label={`${c.overdueCount} vencida${c.overdueCount === 1 ? "" : "s"}`} variant="danger" />}
+                      {isExpanded ? <ChevronUp size={16} style={{ color: "var(--text-muted)" }} /> : <ChevronDown size={16} style={{ color: "var(--text-muted)" }} />}
+                    </button>
+                    {isExpanded && (
+                      <div style={{ padding: "0 var(--sp-3) var(--sp-3)", display: "flex", flexDirection: "column", gap: 6 }}>
+                        {c.courseDetails.length === 0 && <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Sin formaciones asignadas.</div>}
+                        {c.courseDetails.map((d) => (
+                          <div key={d.course.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-inset)" }}>
+                            <span style={{ fontSize: "var(--text-xs)", color: "var(--text-primary)" }}>{d.course.title}</span>
+                            <StatusPill
+                              icon={d.done ? CheckCircle2 : d.overdue ? AlertTriangle : Clock}
+                              label={d.done ? "Completada" : d.overdue ? "Vencida" : d.expired ? "Caducada" : "Pendiente"}
+                              variant={d.done ? "success" : d.overdue ? "danger" : "warning"}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div>
+          <select
+            value={selectedCourseId}
+            onChange={(e) => setSelectedCourseId(e.target.value)}
+            style={{ width: "100%", padding: "8px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)", color: "var(--text-primary)", marginBottom: "var(--sp-3)" }}
+          >
+            <option value="">Selecciona una formación...</option>
+            {courses.map((c) => (
+              <option key={c.id} value={c.id}>{c.title}</option>
+            ))}
+          </select>
+
+          {selectedCourse && (
+            <div>
+              <div style={{ ...DS.card, padding: "var(--sp-3)", marginBottom: "var(--sp-3)" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{courseDoneCount}/{courseRows.length} completada</span>
+                  <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--brand)" }}>{coursePercent}%</span>
+                </div>
+                <div style={{ height: 6, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${coursePercent}%`, backgroundColor: coursePercent === 100 ? "var(--success)" : "var(--brand)", borderRadius: "var(--radius-full)" }} />
+                </div>
+              </div>
+
+              <div style={{ position: "relative", marginBottom: "var(--sp-3)" }}>
+                <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+                <input
+                  value={courseSearch}
+                  onChange={(e) => setCourseSearch(e.target.value)}
+                  placeholder="Buscar por nombre..."
+                  style={{ width: "100%", padding: "7px 10px 7px 32px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)" }}
+                />
+              </div>
+
+              {courseRows.length === 0 ? (
+                <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Nadie coincide, o nadie tiene esta formación asignada.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {courseRows.map((r) => (
+                    <div key={r.employee.name} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "var(--sp-2) var(--sp-3)" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <Avatar name={r.employee.name} size={24} />
+                        <span style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{r.employee.name}</span>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        {r.record?.score != null && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{r.record.score}%</span>}
+                        <StatusPill
+                          icon={r.done ? CheckCircle2 : r.overdue ? AlertTriangle : Clock}
+                          label={r.done ? "Completada" : r.overdue ? "Vencida" : r.expired ? "Caducada" : "Pendiente"}
+                          variant={r.done ? "success" : r.overdue ? "danger" : "warning"}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const LEVELS = [
   { min: 0, name: "Iniciando", color: "#6B655D" },
   { min: 200, name: "En marcha", color: "#3E7C96" },
@@ -6013,44 +6265,8 @@ function AdminPanel({
             </div>
           )}
 
-          <div className="rounded-xl border bg-white overflow-hidden shadow-sm" style={{ borderColor: "#00000012" }}>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-gray-500 border-b" style={{ borderColor: "#00000012" }}>
-                  <th className="px-3 py-2">Empleado</th>
-                  <th className="px-3 py-2">Formación</th>
-                  <th className="px-3 py-2">Estado</th>
-                  <th className="px-3 py-2">Nota</th>
-                  <th className="px-3 py-2">Intentos</th>
-                </tr>
-              </thead>
-              <tbody>
-                {completionRows.length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-gray-400">
-                      Todavía no hay actividad cargada. Pulsa "Cargar / actualizar seguimiento".
-                    </td>
-                  </tr>
-                )}
-                {completionRows.map((r, i) => (
-                  <tr key={i} className="border-b last:border-0" style={{ borderColor: "#00000008" }}>
-                    <td className="px-3 py-2 font-medium">{r.employee}</td>
-                    <td className="px-3 py-2">{r.courseTitle}</td>
-                    <td className="px-3 py-2">
-                      {r.status === "completada" ? (
-                        <span className="text-green-700 font-semibold flex items-center gap-1">
-                          <CheckCircle2 size={13} /> Completada
-                        </span>
-                      ) : (
-                        <span className="text-amber-700 font-semibold">En progreso</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">{r.score != null ? `${r.score}%` : "—"}</td>
-                    <td className="px-3 py-2">{r.attempts || 0}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
+            <ComplianceView employees={employees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} />
           </div>
         </div>
       )}
@@ -6124,38 +6340,7 @@ function AdminPanel({
             <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-3)" }}>
               Cumplimiento de tu equipo
             </div>
-            {teamCompletionRows.length === 0 ? (
-              <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Todavía no hay progreso registrado en tu equipo.</div>
-            ) : (
-              <div style={{ ...DS.card, overflow: "auto" }}>
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--border)" }}>
-                      <th className="px-3 py-2">Persona</th>
-                      <th className="px-3 py-2">Formación</th>
-                      <th className="px-3 py-2">Estado</th>
-                      <th className="px-3 py-2">Nota</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {teamCompletionRows.map((r, i) => (
-                      <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                        <td className="px-3 py-2">{r.employee}</td>
-                        <td className="px-3 py-2">{r.courseTitle}</td>
-                        <td className="px-3 py-2">
-                          {r.status === "completada" ? (
-                            <span style={{ color: "var(--success)", fontWeight: 600 }}>Completada</span>
-                          ) : (
-                            <span style={{ color: "var(--warning)", fontWeight: 600 }}>En progreso</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">{r.score != null ? `${r.score}%` : "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <ComplianceView employees={teamEmployees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} />
           </div>
         </div>
       )}
