@@ -113,6 +113,20 @@ function computeAwaitingRating(course, rec) {
   return quizOk && caseOk;
 }
 
+// Un módulo se da por aprobado solo cuando se cumple TODO lo que tenga
+// configurado: su propio test, las formaciones marcadas como "requisito"
+// (completadas de verdad, no solo empezadas), su caso práctico si tiene uno,
+// y su checklist rápido de pasos si lo tiene.
+function isModulePassed(moduleObj, quizPassed, employeeName, completionsByCourse, moduleProgressEntry) {
+  if (!quizPassed) return false;
+  const requiredCourses = (moduleObj.relatedCourses || []).filter((rc) => rc.mode === "requisito");
+  const requiredCoursesOk = requiredCourses.every((rc) => completionsByCourse[rc.courseId]?.[employeeName]?.status === "completada");
+  const caseOk = !moduleObj.practicalCase || !!moduleProgressEntry?.practicalCaseAnswer;
+  const steps = moduleObj.checklistSteps || [];
+  const checklistOk = steps.length === 0 || steps.every((s) => !!moduleProgressEntry?.checklistChecked?.[s.id]);
+  return requiredCoursesOk && caseOk && checklistOk;
+}
+
 // Un checklist de puesto está "completo" cuando la persona ha puesto algún
 // nivel a CADA ítem — no hace falta que todo sea "lo domino", solo que se
 // haya autoevaluado en todos, sin dejarse ninguno sin mirar.
@@ -443,7 +457,7 @@ function computeEmployeeCompliance(employees, courses, groups, completionsByCour
 // Panel de cumplimiento reutilizable: lo usan tanto el Admin completo (con
 // todos los empleados) como el panel "Mi equipo" de un responsable (con solo
 // los suyos) — misma calidad de herramienta para los dos casos.
-function ComplianceView({ employees, courses, groups, completionsByCourse, onMarkFormReviewed, puestos = [], checklistResponses = {}, onValidateChecklistItem }) {
+function ComplianceView({ employees, courses, groups, completionsByCourse, onMarkFormReviewed, puestos = [], checklistResponses = {}, onValidateChecklistItem, myManagedGroupIds = null }) {
   const [viewMode, setViewMode] = useState("person"); // "person" | "course"
   const [personSearch, setPersonSearch] = useState("");
   const [personSort, setPersonSort] = useState("overdue");
@@ -529,7 +543,7 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
         {[
           { id: "person", label: "Por persona" },
           { id: "course", label: "Por formación" },
-          ...(puestos.length > 0 ? [{ id: "checklist", label: "Checklists de puesto" }] : []),
+          ...((myManagedGroupIds === null ? puestos.length > 0 : puestos.some((p) => p.groupId && myManagedGroupIds.includes(p.groupId))) ? [{ id: "checklist", label: "Checklists de puesto" }] : []),
         ].map((m) => (
           <button
             key={m.id}
@@ -699,11 +713,20 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
       ) : viewMode === "checklist" ? (
         <div>
           {(() => {
+            // Solo puestos del departamento (grupo) que gestiona quien mira esto —
+            // el administrador completo (myManagedGroupIds === null) los ve todos.
+            const visiblePuestos = myManagedGroupIds === null ? puestos : puestos.filter((p) => p.groupId && myManagedGroupIds.includes(p.groupId));
             const employeesWithPuesto = employees
-              .map((e) => ({ employee: e, puesto: puestos.find((p) => p.id === e.puestoId) }))
+              .map((e) => ({ employee: e, puesto: visiblePuestos.find((p) => p.id === e.puestoId) }))
               .filter((x) => !!x.puesto);
             if (employeesWithPuesto.length === 0) {
-              return <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Nadie tiene un puesto con checklist asignado todavía.</div>;
+              return (
+                <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+                  {myManagedGroupIds !== null && puestos.some((p) => p.groupId && myManagedGroupIds.includes(p.groupId))
+                    ? "Nadie de tu departamento tiene todavía un puesto con checklist asignado."
+                    : "No hay ningún puesto con checklist asignado a tu departamento."}
+                </div>
+              );
             }
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
@@ -723,7 +746,7 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
                         <Avatar name={employee.name} size={30} />
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{employee.name}</div>
-                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{puesto.name} · {answered}/{puesto.checklistItems.length} autoevaluados</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{puesto.name} · {answered}/{puesto.checklistItems.length} evaluados</div>
                         </div>
                         {pendingValidation > 0 && <StatusPill icon={ShieldCheck} label={`${pendingValidation} por confirmar`} variant="warning" />}
                         {isExpanded ? <ChevronUp size={16} style={{ color: "var(--text-muted)" }} /> : <ChevronDown size={16} style={{ color: "var(--text-muted)" }} />}
@@ -755,7 +778,7 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
                                     );
                                   })}
                                   {!resp?.level ? (
-                                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Sin autoevaluar todavía</span>
+                                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Sin evaluar todavía</span>
                                   ) : resp.validated ? (
                                     <span style={{ fontSize: 10, fontWeight: 600, color: "var(--info)", display: "flex", alignItems: "center", gap: 3 }}>
                                       <ShieldCheck size={10} /> Confirmado por {resp.updatedBy}
@@ -2290,7 +2313,10 @@ export default function AulaVirtualMB() {
     await saveKey(`mb_completions_course_${courseId}`, updated);
   }
 
+  const [moduleOriginCourseId, setModuleOriginCourseId] = useState(null);
+
   async function openCourse(courseId, origin = "catalog") {
+    if (origin === "module") setModuleOriginCourseId(activeCourseId);
     setActiveCourseId(courseId);
     setQuizAnswers({});
     setQuizResult(null);
@@ -2334,6 +2360,44 @@ export default function AulaVirtualMB() {
   // formación queda "a la espera de valoración" — no se da por completada del
   // todo hasta que la persona puntúa (ver rateCourse) y, si la formación tiene
   // caso práctico, hasta que lo envía también.
+  //
+  // Un módulo ahora puede depender de más cosas que su propio test (ver
+  // isModulePassed) — esta función central recalcula el estado de un módulo
+  // concreto y, con eso, si la formación entera queda lista para valorar.
+  // La usan submitModuleQuiz, submitModulePracticalCase y
+  // toggleModuleChecklistStep, para no repetir la misma lógica tres veces.
+  async function recomputeModuleState(courseId, moduleId, progressPatch) {
+    const course = courses.find((c) => c.id === courseId);
+    const moduleObj = course?.modules?.find((m) => m.id === moduleId);
+    if (!course || !moduleObj) return null;
+
+    // Comprobamos las formaciones requisito leyendo directamente de Supabase,
+    // no del estado de React — que podría no estar actualizado todavía si la
+    // persona nunca abrió esa formación en esta misma sesión.
+    const requiredIds = (moduleObj.relatedCourses || []).filter((rc) => rc.mode === "requisito").map((rc) => rc.courseId);
+    const requiredCompletionsFresh = {};
+    for (const rid of requiredIds) {
+      requiredCompletionsFresh[rid] = await ensureCourseCompletionsLoaded(rid);
+    }
+    const completionsForCheck = { ...completionsByCourse, ...requiredCompletionsFresh };
+
+    const current = await loadKey(`mb_completions_course_${courseId}`, {});
+    const prevRec = current[currentUser] || { startedAt: todayISO(), moduleProgress: {} };
+    const prevModuleRec = prevRec.moduleProgress?.[moduleId] || {};
+    const mergedModuleRec = { ...prevModuleRec, ...progressPatch };
+    const quizPassed = "quizPassed" in mergedModuleRec ? mergedModuleRec.quizPassed : !!prevModuleRec.quizPassed;
+    const passed = isModulePassed(moduleObj, quizPassed, currentUser, completionsForCheck, mergedModuleRec);
+
+    const moduleProgress = { ...(prevRec.moduleProgress || {}), [moduleId]: { ...mergedModuleRec, quizPassed, passed } };
+    const allPassed = (course.modules || []).every((m) => moduleProgress[m.id]?.passed);
+    const updatedRec = { ...prevRec, status: "en_progreso", moduleProgress, completedAt: null, quizPassed: allPassed };
+    updatedRec.awaitingRating = computeAwaitingRating(course, updatedRec);
+    const updated = { ...current, [currentUser]: updatedRec };
+    setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
+    await saveKey(`mb_completions_course_${courseId}`, updated);
+    return moduleProgress[moduleId];
+  }
+
   async function submitModuleQuiz(courseId, moduleObj) {
     if (!currentUser) return null;
     const quiz = moduleObj.quiz || [];
@@ -2342,39 +2406,39 @@ export default function AulaVirtualMB() {
       if (quizAnswers[i] === q.correct) correctCount++;
     });
     const score = quiz.length ? Math.round((correctCount / quiz.length) * 100) : 100;
-    const passed = score >= (moduleObj.passPct ?? 70);
+    const quizPassed = score >= (moduleObj.passPct ?? 70);
 
     const current = await loadKey(`mb_completions_course_${courseId}`, {});
-    const prevRec = current[currentUser] || { startedAt: todayISO(), moduleProgress: {} };
-    const prevModuleRec = prevRec.moduleProgress?.[moduleObj.id];
-    const moduleProgress = {
-      ...(prevRec.moduleProgress || {}),
-      [moduleObj.id]: {
-        passed,
-        score,
-        completedAt: passed ? todayISO() : prevModuleRec?.completedAt || null,
-        attempts: (prevModuleRec?.attempts || 0) + 1,
-      },
-    };
+    const prevModuleRec = current[currentUser]?.moduleProgress?.[moduleObj.id];
+    const attempts = (prevModuleRec?.attempts || 0) + 1;
 
-    const course = courses.find((c) => c.id === courseId);
-    const allPassed = (course?.modules || []).every((m) => moduleProgress[m.id]?.passed);
+    const finalModuleRec = await recomputeModuleState(courseId, moduleObj.id, {
+      quizPassed, score, attempts,
+      completedAt: quizPassed ? todayISO() : prevModuleRec?.completedAt || null,
+    });
 
-    const updatedRec = {
-      ...prevRec,
-      status: "en_progreso",
-      moduleProgress,
-      completedAt: null,
-      quizPassed: allPassed,
-    };
-    updatedRec.awaitingRating = computeAwaitingRating(course, updatedRec);
-    const updated = { ...current, [currentUser]: updatedRec };
-    setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
-    await saveKey(`mb_completions_course_${courseId}`, updated);
-
-    const result = { score, passed, correctCount, total: quiz.length };
+    const result = { score, passed: finalModuleRec?.passed ?? quizPassed, quizPassed, correctCount, total: quiz.length };
     setQuizResult(result);
     return result;
+  }
+
+  // Enviar el caso práctico de un módulo concreto — recalcula si eso era lo
+  // único que faltaba para dar el módulo por aprobado.
+  async function submitModulePracticalCase(courseId, moduleId, text) {
+    if (!currentUser || !text.trim()) return;
+    await recomputeModuleState(courseId, moduleId, {
+      practicalCaseAnswer: { text: text.trim(), submittedAt: todayISO() },
+    });
+  }
+
+  // Marcar/desmarcar un paso del checklist rápido de un módulo.
+  async function toggleModuleChecklistStep(courseId, moduleId, stepId) {
+    if (!currentUser) return;
+    const current = await loadKey(`mb_completions_course_${courseId}`, {});
+    const prevChecked = current[currentUser]?.moduleProgress?.[moduleId]?.checklistChecked || {};
+    await recomputeModuleState(courseId, moduleId, {
+      checklistChecked: { ...prevChecked, [stepId]: !prevChecked[stepId] },
+    });
   }
 
   async function selfReportComplete(courseId) {
@@ -2551,15 +2615,6 @@ export default function AulaVirtualMB() {
     return employees.find((e) => e.name === currentUser)?.managedGroupIds || [];
   }, [employees, currentUser]);
 
-  // El puesto de la persona que ha iniciado sesión, y su checklist si tiene
-  // uno asignado — es lo que decide si le aparece la píldora "Mi checklist".
-  const myEmployeeRecord = useMemo(() => employees.find((e) => e.name === currentUser) || null, [employees, currentUser]);
-  const myPuesto = useMemo(() => {
-    if (!myEmployeeRecord?.puestoId) return null;
-    return puestos.find((p) => p.id === myEmployeeRecord.puestoId) || null;
-  }, [myEmployeeRecord, puestos]);
-  const myChecklistResponses = useMemo(() => checklistResponses[currentUser] || null, [checklistResponses, currentUser]);
-
   // Estado de cada miembro del equipo que gestiona esta persona (si es
   // responsable de alguno) — para el panel visual en su propio Inicio.
   const myTeamStatus = useMemo(() => {
@@ -2683,36 +2738,20 @@ export default function AulaVirtualMB() {
     await saveKey("mb_employees", updated);
   }
 
-  // Autoevaluación: la persona marca cada ítem de su checklist con su propio
-  // nivel. Si más adelante un admin o su responsable lo revisa, puede
-  // confirmar ese mismo nivel o ajustarlo — eso lo hace otra función aparte
-  // (validateChecklistItem), para que quede claro quién puso qué.
-  async function setChecklistItemLevel(employeeName, puestoId, itemId, level) {
-    const current = await loadKey("mb_checklist_responses", {});
-    const prevEntry = current[employeeName] || { puestoId, responses: {} };
-    const updated = {
-      ...current,
-      [employeeName]: {
-        ...prevEntry,
-        puestoId,
-        responses: {
-          ...prevEntry.responses,
-          [itemId]: { level, updatedAt: todayISO(), updatedBy: "self", validated: false },
-        },
-        lastUpdated: todayISO(),
-      },
-    };
-    setChecklistResponses(updated);
-    await saveKey("mb_checklist_responses", updated);
-  }
+  // El checklist de puesto ya no lo rellena la propia persona — lo evalúa
+  // directamente su responsable o un admin (ver validateChecklistItem, más
+  // abajo). Se guarda igual, sin importar quién lo puso, así que un solo
+  // formato de registro vale para todo.
 
   // Validación de un admin/responsable: confirma o ajusta el nivel que puso
   // la propia persona. No hace falta esperar a validar todos los ítems de
   // golpe — se puede ir revisando uno a uno, a su ritmo.
+  // Quien evalúa cada ítem es siempre el responsable o un admin — nunca la
+  // propia persona. Funciona igual la primera vez (no hay nada guardado
+  // todavía) que al corregir algo puesto anteriormente.
   async function validateChecklistItem(employeeName, itemId, level) {
     const current = await loadKey("mb_checklist_responses", {});
-    const prevEntry = current[employeeName];
-    if (!prevEntry) return;
+    const prevEntry = current[employeeName] || { responses: {} };
     const updated = {
       ...current,
       [employeeName]: {
@@ -2738,13 +2777,32 @@ export default function AulaVirtualMB() {
       const rec = await loadKey(`mb_completions_course_${c.id}`, null);
       if (rec) allCompletions[c.id] = rec;
     }
-    const payload = { exportedAt: new Date().toISOString(), courses, news, employees, groups, completionsByCourse: allCompletions, adminPasswordHash };
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      courses, news, employees, groups, completionsByCourse: allCompletions, adminPasswordHash,
+      // Añadido cuando se construyeron Rutas, Puestos y el checklist —
+      // antes de esto, la copia de seguridad se quedaba corta y no lo
+      // incluía, con el riesgo de perderlo todo si alguna vez hiciera falta
+      // restaurar.
+      paths, puestos, checklistResponses,
+    };
     if (includeAttachments) {
       const attachmentsData = {};
       for (const c of courses) {
         for (const att of c.attachments || []) {
           const data = await loadKey(att.storageKey, null);
           if (data) attachmentsData[att.storageKey] = data;
+        }
+        // Los documentos adjuntos dentro de cada módulo son adjuntos aparte,
+        // con su propia storageKey — hay que recorrerlos también, o se
+        // quedarían fuera de la copia igual que antes.
+        for (const mod of c.modules || []) {
+          for (const att of mod.attachments || []) {
+            if (att.storageKey) {
+              const data = await loadKey(att.storageKey, null);
+              if (data) attachmentsData[att.storageKey] = data;
+            }
+          }
         }
       }
       payload.attachmentsData = attachmentsData;
@@ -2779,6 +2837,18 @@ export default function AulaVirtualMB() {
     if (payload.groups) {
       setGroups(payload.groups);
       await saveKey("mb_groups", payload.groups);
+    }
+    if (payload.paths) {
+      setPaths(payload.paths);
+      await saveKey("mb_paths", payload.paths);
+    }
+    if (payload.puestos) {
+      setPuestos(payload.puestos);
+      await saveKey("mb_puestos", payload.puestos);
+    }
+    if (payload.checklistResponses) {
+      setChecklistResponses(payload.checklistResponses);
+      await saveKey("mb_checklist_responses", payload.checklistResponses);
     }
     if (payload.completionsByCourse) {
       for (const [courseId, data] of Object.entries(payload.completionsByCourse)) {
@@ -3192,20 +3262,6 @@ export default function AulaVirtualMB() {
                   {!isCompactHeader && <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)" }}>Mi equipo</span>}
                 </button>
               )}
-              {myPuesto && (
-                <button
-                  onClick={() => setView("checklist")}
-                  style={{
-                    display: "flex", alignItems: "center", gap: isCompactHeader ? 0 : 5, borderRadius: "var(--radius-full)",
-                    padding: isCompactHeader ? "4px 5px" : "4px 8px",
-                    backgroundColor: "var(--success-soft)", border: view === "checklist" ? "1.5px solid var(--success)" : "1.5px solid transparent", cursor: "pointer",
-                  }}
-                  title="Mi checklist"
-                >
-                  <ClipboardList size={13} style={{ color: "var(--success)" }} />
-                  {!isCompactHeader && <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--success)" }}>Mi checklist</span>}
-                </button>
-              )}
               {isAdmin && (
                 <div style={{
                   display: "flex", alignItems: "center", gap: isCompactHeader ? 0 : 5, borderRadius: "var(--radius-full)",
@@ -3346,14 +3402,6 @@ export default function AulaVirtualMB() {
             onBack={() => setView("routes")}
           />
         )}
-        {view === "checklist" && myPuesto && (
-          <MyChecklistView
-            puesto={myPuesto}
-            employee={myEmployeeRecord}
-            responseEntry={myChecklistResponses}
-            onSetLevel={(itemId, level) => setChecklistItemLevel(currentUser, myPuesto.id, itemId, level)}
-          />
-        )}
         {view === "catalog" && (
           <Catalog
             courses={courses}
@@ -3388,7 +3436,20 @@ export default function AulaVirtualMB() {
             onSelfReport={() => selfReportComplete(activeCourse.id)}
             onRateCourse={(rating, comment) => rateCourse(activeCourse.id, rating, comment)}
             onSubmitPracticalCase={(text) => submitPracticalCase(activeCourse.id, text)}
-            onBack={() => setView(courseOrigin === "path" ? "path-detail" : "catalog")}
+            courses={courses}
+            completionsByCourse={completionsByCourse}
+            onOpenRelatedCourse={(courseId) => openCourse(courseId, "module")}
+            onToggleModuleChecklistStep={(moduleId, stepId) => toggleModuleChecklistStep(activeCourse.id, moduleId, stepId)}
+            onSubmitModulePracticalCase={(moduleId, text) => submitModulePracticalCase(activeCourse.id, moduleId, text)}
+            onBack={() => {
+              if (courseOrigin === "module" && moduleOriginCourseId) {
+                openCourse(moduleOriginCourseId, "catalog");
+              } else if (courseOrigin === "path") {
+                setView("path-detail");
+              } else {
+                setView("catalog");
+              }
+            }}
             onRetry={() => {
               setQuizAnswers({});
               setQuizResult(null);
@@ -4495,7 +4556,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
 }
 
 
-function CourseDetail({ course, currentUser, status, record, quizAnswers, setQuizAnswers, quizResult, onSubmitQuiz, onSubmitModuleQuiz, onResetQuiz, onSelfReport, onRateCourse, onSubmitPracticalCase, onBack, onRetry }) {
+function CourseDetail({ course, currentUser, status, record, quizAnswers, setQuizAnswers, quizResult, onSubmitQuiz, onSubmitModuleQuiz, onResetQuiz, onSelfReport, onRateCourse, onSubmitPracticalCase, courses, completionsByCourse, onOpenRelatedCourse, onToggleModuleChecklistStep, onSubmitModulePracticalCase, onBack, onRetry }) {
   if (course.modules && course.modules.length > 0) {
     return (
       <ModularCourseDetail
@@ -4509,6 +4570,11 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
         onResetQuiz={onResetQuiz}
         onRateCourse={onRateCourse}
         onSubmitPracticalCase={onSubmitPracticalCase}
+        courses={courses}
+        completionsByCourse={completionsByCourse}
+        onOpenRelatedCourse={onOpenRelatedCourse}
+        onToggleModuleChecklistStep={onToggleModuleChecklistStep}
+        onSubmitModulePracticalCase={onSubmitModulePracticalCase}
         onBack={onBack}
       />
     );
@@ -4780,7 +4846,7 @@ function ModuleStepper({ modules, moduleProgress, activeIndex, viewedIndex, onSe
   );
 }
 
-function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers, quizResult, onSubmit, onResetQuiz, onContinue, isLastModule }) {
+function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers, quizResult, onSubmit, onResetQuiz, onContinue, isLastModule, courses = [], completionsByCourse = {}, currentUser, moduleProgressEntry, onOpenRelatedCourse, onToggleChecklistStep, onSubmitPracticalCase }) {
   const embed = getVideoEmbedUrl(mod.videoUrl);
   const quiz = mod.quiz || [];
   const allAnswered = quiz.every((_, i) => quizAnswers[i] !== undefined);
@@ -4823,6 +4889,83 @@ function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers
             ))}
           </div>
         </div>
+      )}
+
+      {(mod.relatedCourses || []).length > 0 && (
+        <div>
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <Map size={13} /> FORMACIÓN RELACIONADA
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+            {mod.relatedCourses.map((rc) => {
+              const relCourse = courses.find((c) => c.id === rc.courseId);
+              if (!relCourse) return null;
+              const relDone = currentUser && completionsByCourse[rc.courseId]?.[currentUser]?.status === "completada";
+              return (
+                <button
+                  key={rc.courseId}
+                  onClick={() => onOpenRelatedCourse && onOpenRelatedCourse(rc.courseId)}
+                  style={{ ...DS.card, textAlign: "left", cursor: "pointer", padding: "var(--sp-3)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    {relDone ? <CheckCircle2 size={15} style={{ color: "var(--success)", flexShrink: 0 }} /> : <ChevronRight size={15} style={{ color: "var(--text-muted)", flexShrink: 0 }} />}
+                    <span style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{relCourse.title}</span>
+                  </div>
+                  {rc.mode === "requisito" && !relDone && <StatusPill icon={AlertTriangle} label="Requisito" variant="warning" />}
+                  {rc.mode === "requisito" && relDone && <StatusPill icon={CheckCircle2} label="Hecho" variant="success" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {(mod.externalLinks || []).length > 0 && (
+        <div>
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <Link2 size={13} /> ENLACES DE ESTE MÓDULO
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+            {mod.externalLinks.map((link) => (
+              <a
+                key={link.id}
+                href={link.url}
+                target="_blank"
+                rel="noreferrer"
+                style={{ ...DS.card, padding: "var(--sp-3)", display: "flex", alignItems: "center", gap: 8, fontSize: "var(--text-sm)", color: "var(--info)", textDecoration: "none" }}
+              >
+                <Link2 size={14} /> {link.label || link.url}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(mod.checklistSteps || []).length > 0 && (
+        <div>
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <ClipboardList size={13} /> ANTES DE CONTINUAR
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+            {mod.checklistSteps.map((step) => {
+              const checked = !!moduleProgressEntry?.checklistChecked?.[step.id];
+              return (
+                <label key={step.id} style={{ ...DS.card, padding: "var(--sp-3)", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                  <input type="checkbox" checked={checked} onChange={() => onToggleChecklistStep && onToggleChecklistStep(step.id)} />
+                  <span style={{ fontSize: "var(--text-sm)", color: "var(--text-primary)", textDecoration: checked ? "line-through" : "none", opacity: checked ? 0.6 : 1 }}>{step.text}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {mod.practicalCase && (
+        <PracticalCaseSection
+          practicalCase={mod.practicalCase}
+          answer={moduleProgressEntry?.practicalCaseAnswer}
+          onSubmit={(text) => onSubmitPracticalCase && onSubmitPracticalCase(text)}
+        />
       )}
 
       {showReadOnlyPassed && (
@@ -4933,7 +5076,7 @@ function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers
   );
 }
 
-function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuizAnswers, quizResult, onSubmitModuleQuiz, onResetQuiz, onRateCourse, onSubmitPracticalCase, onBack }) {
+function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuizAnswers, quizResult, onSubmitModuleQuiz, onResetQuiz, onRateCourse, onSubmitPracticalCase, courses, completionsByCourse, onOpenRelatedCourse, onToggleModuleChecklistStep, onSubmitModulePracticalCase, onBack }) {
   const modules = course.modules;
   const moduleProgress = record?.moduleProgress || {};
   const passedCount = modules.filter((m) => moduleProgress[m.id]?.passed).length;
@@ -5008,6 +5151,13 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
                   await onSubmitModuleQuiz(viewedModule);
                 }}
                 onResetQuiz={onResetQuiz}
+                courses={courses}
+                completionsByCourse={completionsByCourse}
+                currentUser={currentUser}
+                moduleProgressEntry={moduleProgress[viewedModule?.id]}
+                onOpenRelatedCourse={onOpenRelatedCourse}
+                onToggleChecklistStep={(stepId) => onToggleModuleChecklistStep(viewedModule.id, stepId)}
+                onSubmitPracticalCase={(text) => onSubmitModulePracticalCase(viewedModule.id, text)}
               />
             )}
           </div>
@@ -5053,25 +5203,67 @@ function checklistCategoryMeta(id) {
   return CHECKLIST_CATEGORIES.find((c) => c.id === id) || CHECKLIST_CATEGORIES[0];
 }
 
-function PuestosAdminTab({ puestos, onSavePuesto, onDeletePuesto }) {
+function ModuleChecklistStepInput({ onAdd }) {
+  const [text, setText] = useState("");
+  return (
+    <div className="flex gap-2">
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            onAdd(text);
+            setText("");
+          }
+        }}
+        placeholder="Ej. Firma la hoja de recepción antes de continuar"
+        className="flex-1 text-xs rounded-md border px-2 py-1.5"
+        style={{ borderColor: "#00000018" }}
+      />
+      <button
+        onClick={() => {
+          onAdd(text);
+          setText("");
+        }}
+        disabled={!text.trim()}
+        className="text-xs font-semibold px-2"
+        style={{ color: BRAND.blue, opacity: !text.trim() ? 0.4 : 1 }}
+      >
+        Añadir
+      </button>
+    </div>
+  );
+}
+
+function PuestosAdminTab({ puestos, groups, onSavePuesto, onDeletePuesto }) {
   const [editingId, setEditingId] = useState(undefined); // undefined = lista, null = nuevo, id = editando
   const [name, setName] = useState("");
+  const [groupId, setGroupId] = useState("");
   const [deadlineDays, setDeadlineDays] = useState("");
   const [items, setItems] = useState([]);
   const [newItemText, setNewItemText] = useState("");
   const [newItemCategory, setNewItemCategory] = useState("conocimiento");
+  const [importError, setImportError] = useState("");
+
+  function groupName(id) {
+    return groups.find((g) => g.id === id)?.name || null;
+  }
 
   function startNew() {
     setEditingId(null);
     setName("");
+    setGroupId("");
     setDeadlineDays("");
     setItems([]);
+    setImportError("");
   }
   function startEdit(p) {
     setEditingId(p.id);
     setName(p.name);
+    setGroupId(p.groupId || "");
     setDeadlineDays(p.deadlineDays || "");
     setItems([...(p.checklistItems || [])]);
+    setImportError("");
   }
   function addItem() {
     if (!newItemText.trim()) return;
@@ -5080,6 +5272,64 @@ function PuestosAdminTab({ puestos, onSavePuesto, onDeletePuesto }) {
   }
   function removeItem(itemId) {
     setItems((prev) => prev.filter((i) => i.id !== itemId));
+  }
+
+  // Importar el checklist entero desde un Excel: dos columnas, "Categoría" y
+  // "Ítem" (los nombres de columna no distinguen mayúsculas ni acentos, para
+  // no obligar a nadie a escribirlos exactamente igual). Los ítems que se
+  // importan se añaden a los que ya hubiera, no los sustituyen — así no hay
+  // riesgo de borrar algo por subir el archivo sin querer dos veces.
+  function normalizeHeader(h) {
+    return String(h || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  }
+  function normalizeCategory(raw) {
+    const v = normalizeHeader(raw);
+    if (v.startsWith("apt")) return "aptitud";
+    if (v.startsWith("hab")) return "habilidad";
+    return "conocimiento";
+  }
+  async function handleImportFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setImportError("");
+    try {
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      if (rows.length === 0) {
+        setImportError("El archivo no tiene filas de datos, o está vacío.");
+        e.target.value = "";
+        return;
+      }
+      const headerMap = {};
+      for (const key of Object.keys(rows[0])) {
+        const norm = normalizeHeader(key);
+        if (norm.includes("categor")) headerMap.category = key;
+        else if (norm.includes("item") || norm.includes("ítem") || norm.includes("texto") || norm.includes("descripcion")) headerMap.text = key;
+      }
+      if (!headerMap.text) {
+        setImportError('No encuentro una columna de texto del ítem. Pon una columna llamada "Ítem" o "Descripción".');
+        e.target.value = "";
+        return;
+      }
+      const imported = rows
+        .map((row) => ({
+          id: uid(),
+          text: String(row[headerMap.text] || "").trim(),
+          category: headerMap.category ? normalizeCategory(row[headerMap.category]) : "conocimiento",
+        }))
+        .filter((it) => it.text.length > 0);
+      if (imported.length === 0) {
+        setImportError("No he encontrado ninguna fila con texto en la columna del ítem.");
+        e.target.value = "";
+        return;
+      }
+      setItems((prev) => [...prev, ...imported]);
+    } catch (err) {
+      setImportError("No he podido leer ese archivo. Comprueba que sea un Excel (.xlsx) o CSV válido.");
+    }
+    e.target.value = "";
   }
 
   if (editingId === undefined) {
@@ -5095,10 +5345,16 @@ function PuestosAdminTab({ puestos, onSavePuesto, onDeletePuesto }) {
         {puestos.map((p) => (
           <div key={p.id} style={{ ...DS.card, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "var(--sp-3)" }}>
             <div>
-              <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{p.name}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{ fontWeight: 600, fontSize: "var(--text-sm)", color: "var(--text-primary)" }}>{p.name}</div>
+                {groupName(p.groupId) && (
+                  <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 7px", borderRadius: "var(--radius-full)", backgroundColor: "var(--info-soft)", color: "var(--info)" }}>{groupName(p.groupId)}</span>
+                )}
+              </div>
               <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
                 {(p.checklistItems || []).length} ítem{(p.checklistItems || []).length === 1 ? "" : "s"}
                 {p.deadlineDays ? ` · ${p.deadlineDays} días de plazo desde la asignación` : ""}
+                {!groupName(p.groupId) && " · sin departamento asignado"}
               </div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
@@ -5118,15 +5374,42 @@ function PuestosAdminTab({ puestos, onSavePuesto, onDeletePuesto }) {
       </button>
 
       <TextInput label="Nombre del puesto" value={name} onChange={setName} placeholder="Ej. Almacén — Mozo, Administración..." />
+
+      <label className="block text-xs font-semibold text-gray-500 mb-1">
+        Departamento
+        <select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900" style={{ borderColor: "#00000020" }}>
+          <option value="">Sin departamento asignado</option>
+          {groups.map((g) => (
+            <option key={g.id} value={g.id}>{g.name}</option>
+          ))}
+        </select>
+      </label>
+      <div className="text-[11px] text-gray-400 -mt-2">
+        El checklist de este puesto solo lo verá y podrá evaluar quien sea responsable de este departamento (o el administrador completo) — la propia persona con este puesto nunca lo ve.
+      </div>
+
       <div className="w-52">
-        <TextInput label="Plazo para completarlo (días, opcional)" type="number" value={deadlineDays} onChange={setDeadlineDays} placeholder="Ej. 30 — vacío = sin plazo" />
+        <TextInput label="Plazo para evaluarlo (días, opcional)" type="number" value={deadlineDays} onChange={setDeadlineDays} placeholder="Ej. 30 — vacío = sin plazo" />
       </div>
 
       <div>
         <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)" }}>
           Checklist de conocimientos, aptitudes y habilidades
         </div>
-        <div style={{ display: "flex", gap: 6, marginBottom: "var(--sp-3)", flexWrap: "wrap" }}>
+
+        <div style={{ ...DS.card, padding: "var(--sp-3)", marginBottom: "var(--sp-3)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--brand)", cursor: "pointer" }}>
+            <Upload size={14} />
+            Importar desde Excel
+            <input type="file" accept=".xlsx,.xls,.csv" onChange={handleImportFile} style={{ display: "none" }} />
+          </label>
+          <span className="text-[11px] text-gray-400">Dos columnas: "Categoría" (Conocimiento/Aptitud/Habilidad) e "Ítem". Se añade a lo que ya haya.</span>
+        </div>
+        {importError && (
+          <div style={{ fontSize: "var(--text-xs)", color: "var(--danger)", marginBottom: "var(--sp-2)" }}>{importError}</div>
+        )}
+
+        <div className="flex gap-2 mb-3">
           <input
             value={newItemText}
             onChange={(e) => setNewItemText(e.target.value)}
@@ -5146,14 +5429,14 @@ function PuestosAdminTab({ puestos, onSavePuesto, onDeletePuesto }) {
         </div>
 
         {items.length === 0 ? (
-          <div className="text-xs text-gray-400">Añade al menos un ítem para que el checklist tenga sentido.</div>
+          <div className="text-xs text-gray-400">Añade al menos un ítem (a mano o importando un Excel) para que el checklist tenga sentido.</div>
         ) : (
           CHECKLIST_CATEGORIES.map((cat) => {
             const catItems = items.filter((i) => i.category === cat.id);
             if (catItems.length === 0) return null;
             return (
               <div key={cat.id} style={{ marginBottom: "var(--sp-3)" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: cat.color, marginBottom: 6 }}>{cat.label.toUpperCase()}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: cat.color, marginBottom: 6 }}>{cat.label.toUpperCase()} ({catItems.length})</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   {catItems.map((item) => (
                     <div key={item.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 10px", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-inset)" }}>
@@ -5171,7 +5454,7 @@ function PuestosAdminTab({ puestos, onSavePuesto, onDeletePuesto }) {
       <button
         disabled={!name.trim() || items.length === 0}
         onClick={async () => {
-          await onSavePuesto({ id: editingId || uid(), name: name.trim(), deadlineDays: deadlineDays ? Number(deadlineDays) : null, checklistItems: items });
+          await onSavePuesto({ id: editingId || uid(), name: name.trim(), groupId: groupId || null, deadlineDays: deadlineDays ? Number(deadlineDays) : null, checklistItems: items });
           setEditingId(undefined);
         }}
         style={{ fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 16px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: (!name.trim() || items.length === 0) ? 0.4 : 1, width: "fit-content" }}
@@ -5645,7 +5928,17 @@ function AdminPanel({
       quiz: (course.quiz && course.quiz.length ? course.quiz : [{ ...emptyQuestion }]).map((q) => ({ ...q, options: [...q.options] })),
       attachments: course.attachments ? [...course.attachments] : [],
       assignment: course.assignment ? { ...course.assignment } : { ...emptyAssignment },
-      modules: course.modules ? course.modules.map((m) => ({ ...m, quiz: (m.quiz || []).map((q) => ({ ...q, options: [...q.options] })), attachments: m.attachments ? [...m.attachments] : [] })) : [],
+      modules: course.modules
+        ? course.modules.map((m) => ({
+            ...m,
+            quiz: (m.quiz || []).map((q) => ({ ...q, options: [...q.options] })),
+            attachments: m.attachments ? [...m.attachments] : [],
+            relatedCourses: m.relatedCourses ? [...m.relatedCourses] : [],
+            externalLinks: m.externalLinks ? [...m.externalLinks] : [],
+            practicalCase: m.practicalCase ? { ...m.practicalCase } : null,
+            checklistSteps: m.checklistSteps ? [...m.checklistSteps] : [],
+          }))
+        : [],
     });
     setFileError("");
     setPendingWarnings(null);
@@ -5709,14 +6002,18 @@ function AdminPanel({
   }
 
   // ---- Gestión de módulos (formaciones secuenciales) ----
+  const NEW_MODULE_TEMPLATE = () => ({
+    id: uid(), title: "", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [],
+    relatedCourses: [], externalLinks: [], practicalCase: null, checklistSteps: [],
+  });
   function toggleModularMode() {
     setDraft((d) => {
       const turningOn = !(d.modules && d.modules.length > 0);
-      return { ...d, modules: turningOn ? [{ id: uid(), title: "Módulo 1", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [] }] : [] };
+      return { ...d, modules: turningOn ? [{ ...NEW_MODULE_TEMPLATE(), title: "Módulo 1" }] : [] };
     });
   }
   function addModule() {
-    setDraft((d) => ({ ...d, modules: [...(d.modules || []), { id: uid(), title: `Módulo ${(d.modules || []).length + 1}`, body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [] }] }));
+    setDraft((d) => ({ ...d, modules: [...(d.modules || []), { ...NEW_MODULE_TEMPLATE(), title: `Módulo ${(d.modules || []).length + 1}` }] }));
   }
   function removeModule(mi) {
     setDraft((d) => ({ ...d, modules: d.modules.filter((_, i) => i !== mi) }));
@@ -5732,6 +6029,55 @@ function AdminPanel({
   }
   function updateModuleField(mi, field, value) {
     setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, [field]: value } : m)) }));
+  }
+  // Formaciones relacionadas: se guarda solo el id y si es "requisito" (hace
+  // falta completarla para pasar el módulo) o "recomendada" (solo se sugiere).
+  function toggleModuleRelatedCourse(mi, courseId) {
+    setDraft((d) => ({
+      ...d,
+      modules: d.modules.map((m, i) => {
+        if (i !== mi) return m;
+        const existing = (m.relatedCourses || []).find((rc) => rc.courseId === courseId);
+        const relatedCourses = existing
+          ? m.relatedCourses.filter((rc) => rc.courseId !== courseId)
+          : [...(m.relatedCourses || []), { courseId, mode: "recomendada" }];
+        return { ...m, relatedCourses };
+      }),
+    }));
+  }
+  function setModuleRelatedCourseMode(mi, courseId, mode) {
+    setDraft((d) => ({
+      ...d,
+      modules: d.modules.map((m, i) =>
+        i !== mi ? m : { ...m, relatedCourses: m.relatedCourses.map((rc) => (rc.courseId === courseId ? { ...rc, mode } : rc)) }
+      ),
+    }));
+  }
+  // Enlaces externos: título + URL, para protocolos o recursos que no tiene
+  // sentido subir como documento.
+  function addModuleLink(mi) {
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, externalLinks: [...(m.externalLinks || []), { id: uid(), label: "", url: "" }] } : m)) }));
+  }
+  function updateModuleLink(mi, linkId, field, value) {
+    setDraft((d) => ({
+      ...d,
+      modules: d.modules.map((m, i) =>
+        i !== mi ? m : { ...m, externalLinks: m.externalLinks.map((l) => (l.id === linkId ? { ...l, [field]: value } : l)) }
+      ),
+    }));
+  }
+  function removeModuleLink(mi, linkId) {
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, externalLinks: m.externalLinks.filter((l) => l.id !== linkId) } : m)) }));
+  }
+  // Checklist rápido de pasos: una lista corta a marcar, distinta del
+  // checklist de conocimientos por puesto — este es más ligero, sin niveles
+  // ni categorías, solo "hecho / no hecho".
+  function addModuleChecklistStep(mi, text) {
+    if (!text.trim()) return;
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, checklistSteps: [...(m.checklistSteps || []), { id: uid(), text: text.trim() }] } : m)) }));
+  }
+  function removeModuleChecklistStep(mi, stepId) {
+    setDraft((d) => ({ ...d, modules: d.modules.map((m, i) => (i === mi ? { ...m, checklistSteps: m.checklistSteps.filter((s) => s.id !== stepId) } : m)) }));
   }
   function handleModuleFileInput(mi, e) {
     const file = e.target.files[0];
@@ -6350,6 +6696,105 @@ function AdminPanel({
                     <input type="file" onChange={(e) => handleModuleFileInput(mi, e)} className="text-xs" accept=".pdf,.doc,.docx" />
                   </div>
 
+                  <div>
+                    <div className="text-[11px] font-semibold text-gray-500 mb-1">Formación relacionada</div>
+                    <div className="rounded-md border p-2 space-y-1" style={{ borderColor: "#00000018", maxHeight: 160, overflowY: "auto" }}>
+                      {courses.filter((c) => c.id !== draft.id).length === 0 && (
+                        <div className="text-[11px] text-gray-400">No hay otras formaciones creadas todavía.</div>
+                      )}
+                      {courses.filter((c) => c.id !== draft.id).map((c) => {
+                        const rel = (mod.relatedCourses || []).find((rc) => rc.courseId === c.id);
+                        return (
+                          <div key={c.id} className="flex items-center gap-2">
+                            <input type="checkbox" checked={!!rel} onChange={() => toggleModuleRelatedCourse(mi, c.id)} />
+                            <span className="text-xs flex-1 truncate" style={{ color: "var(--text-primary)" }}>{c.title}</span>
+                            {rel && (
+                              <select
+                                value={rel.mode}
+                                onChange={(e) => setModuleRelatedCourseMode(mi, c.id, e.target.value)}
+                                className="text-[11px] rounded border px-1 py-0.5"
+                                style={{ borderColor: "#00000018" }}
+                              >
+                                <option value="recomendada">Recomendada</option>
+                                <option value="requisito">Requisito (hay que completarla)</option>
+                              </select>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-[11px] font-semibold text-gray-500 mb-1">Enlaces externos (protocolos, intranet...)</div>
+                    {(mod.externalLinks || []).map((link) => (
+                      <div key={link.id} className="flex items-center gap-2 mb-1">
+                        <input
+                          value={link.label}
+                          onChange={(e) => updateModuleLink(mi, link.id, "label", e.target.value)}
+                          placeholder="Título (ej. Protocolo de manipulación)"
+                          className="flex-1 text-xs rounded-md border px-2 py-1"
+                          style={{ borderColor: "#00000018" }}
+                        />
+                        <input
+                          value={link.url}
+                          onChange={(e) => updateModuleLink(mi, link.id, "url", e.target.value)}
+                          placeholder="https://..."
+                          className="flex-1 text-xs rounded-md border px-2 py-1"
+                          style={{ borderColor: "#00000018" }}
+                        />
+                        <button onClick={() => removeModuleLink(mi, link.id)} className="text-red-500 flex-shrink-0"><X size={13} /></button>
+                      </div>
+                    ))}
+                    <button onClick={() => addModuleLink(mi)} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
+                      <Plus size={12} /> Añadir enlace
+                    </button>
+                  </div>
+
+                  <div>
+                    <div className="text-[11px] font-semibold text-gray-500 mb-1">Checklist rápido de pasos (opcional)</div>
+                    {(mod.checklistSteps || []).map((step) => (
+                      <div key={step.id} className="flex items-center justify-between gap-2 rounded-md px-2 py-1 mb-1" style={{ backgroundColor: "var(--bg-inset)" }}>
+                        <span className="text-xs" style={{ color: "var(--text-primary)" }}>{step.text}</span>
+                        <button onClick={() => removeModuleChecklistStep(mi, step.id)} className="text-red-500 flex-shrink-0"><X size={13} /></button>
+                      </div>
+                    ))}
+                    <ModuleChecklistStepInput onAdd={(text) => addModuleChecklistStep(mi, text)} />
+                  </div>
+
+                  <div style={{ ...DS.card, padding: "var(--sp-3)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: mod.practicalCase ? "var(--sp-2)" : 0 }}>
+                      <input
+                        type="checkbox"
+                        id={`mod-case-${mod.id}`}
+                        checked={!!mod.practicalCase}
+                        onChange={(e) => updateModuleField(mi, "practicalCase", e.target.checked ? { title: "", description: "" } : null)}
+                      />
+                      <label htmlFor={`mod-case-${mod.id}`} className="text-xs" style={{ cursor: "pointer" }}>
+                        <span className="font-semibold" style={{ color: "var(--text-primary)" }}>Caso práctico de este módulo</span>
+                      </label>
+                    </div>
+                    {mod.practicalCase && (
+                      <div className="space-y-1.5">
+                        <input
+                          value={mod.practicalCase.title}
+                          onChange={(e) => updateModuleField(mi, "practicalCase", { ...mod.practicalCase, title: e.target.value })}
+                          placeholder="Título del caso"
+                          className="w-full text-xs rounded-md border px-2 py-1.5"
+                          style={{ borderColor: "#00000018" }}
+                        />
+                        <textarea
+                          value={mod.practicalCase.description}
+                          onChange={(e) => updateModuleField(mi, "practicalCase", { ...mod.practicalCase, description: e.target.value })}
+                          placeholder="Describe el escenario..."
+                          rows={3}
+                          className="w-full text-xs rounded-md border px-2 py-1.5"
+                          style={{ borderColor: "#00000018" }}
+                        />
+                      </div>
+                    )}
+                  </div>
+
                   <div className="flex items-center justify-between pt-1">
                     <div className="text-xs font-semibold text-gray-500">Test de este módulo</div>
                     <button
@@ -6669,7 +7114,7 @@ function AdminPanel({
       )}
 
       {tab === "puestos" && mode !== "team" && (
-        <PuestosAdminTab puestos={puestos} onSavePuesto={onSavePuesto} onDeletePuesto={onDeletePuesto} />
+        <PuestosAdminTab puestos={puestos} groups={groups} onSavePuesto={onSavePuesto} onDeletePuesto={onDeletePuesto} />
       )}
 
       {tab === "news" && mode !== "team" && (
@@ -7335,7 +7780,7 @@ function AdminPanel({
           )}
 
           <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
-            <ComplianceView employees={employees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} />
+            <ComplianceView employees={employees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} myManagedGroupIds={null} />
           </div>
         </div>
       )}
@@ -7409,7 +7854,7 @@ function AdminPanel({
             <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-3)" }}>
               Cumplimiento de tu equipo
             </div>
-            <ComplianceView employees={teamEmployees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} />
+            <ComplianceView employees={teamEmployees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} myManagedGroupIds={restrictToGroupIds} />
           </div>
         </div>
       )}
