@@ -3,7 +3,7 @@ import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
   Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp, ChevronRight,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
-  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check, Eye, BookOpen, Sparkles, Wrench, Archive
+  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check, Eye, BookOpen, Sparkles, Wrench, Archive, Copy, Save, GripVertical
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { PublicClientApplication } from "@azure/msal-browser";
@@ -240,6 +240,63 @@ const HEADER_ALIASES = {
   equipo: ["equipo", "grupo", "team", "departamento", "area"],
   puesto: ["puesto", "cargo", "posicion", "position", "job", "role", "rol"],
 };
+
+// Importar preguntas de test desde un Excel: reconoce columnas Pregunta,
+// Opción 1-4, y Correcta (que puede ser un número 1-4, una letra a-d, o el
+// texto exacto de la opción correcta — lo que resulte más cómodo de escribir
+// según de dónde venga el archivo). Se usa tanto en el test principal de una
+// formación como en el de cada módulo.
+const QUIZ_HEADER_ALIASES = {
+  pregunta: ["pregunta", "question", "enunciado"],
+  opcion1: ["opcion 1", "opcion1", "option 1", "respuesta 1", "a"],
+  opcion2: ["opcion 2", "opcion2", "option 2", "respuesta 2", "b"],
+  opcion3: ["opcion 3", "opcion3", "option 3", "respuesta 3", "c"],
+  opcion4: ["opcion 4", "opcion4", "option 4", "respuesta 4", "d"],
+  correcta: ["correcta", "correct", "respuesta correcta", "solucion", "opcion correcta"],
+};
+function matchQuizColumn(headers, field) {
+  const aliases = QUIZ_HEADER_ALIASES[field];
+  return headers.findIndex((h) => aliases.includes(normalizeHeader(h)));
+}
+async function parseQuizExcelFile(file) {
+  const buf = await file.arrayBuffer();
+  const workbook = XLSX.read(buf, { type: "array" });
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false, defval: "" });
+  if (rows.length === 0) return { questions: [], error: "El archivo está vacío." };
+
+  const headers = rows[0];
+  const pIdx = matchQuizColumn(headers, "pregunta");
+  if (pIdx === -1) {
+    return { questions: [], error: 'No encuentro una columna de pregunta. Usa una cabecera como "Pregunta" en la primera fila.' };
+  }
+  const optIdx = [1, 2, 3, 4].map((n) => matchQuizColumn(headers, `opcion${n}`));
+  const correctIdx = matchQuizColumn(headers, "correcta");
+
+  const questions = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const question = String(row[pIdx] || "").trim();
+    if (!question) continue;
+    const options = optIdx.map((idx) => (idx !== -1 ? String(row[idx] || "").trim() : ""));
+    let correct = 0;
+    if (correctIdx !== -1) {
+      const raw = String(row[correctIdx] || "").trim();
+      const asNumber = Number(raw);
+      if (!isNaN(asNumber) && asNumber >= 1 && asNumber <= 4) {
+        correct = asNumber - 1;
+      } else if (/^[a-dA-D]$/.test(raw)) {
+        correct = raw.toLowerCase().charCodeAt(0) - 97;
+      } else {
+        const matchIdx = options.findIndex((o) => o.toLowerCase() === raw.toLowerCase());
+        if (matchIdx !== -1) correct = matchIdx;
+      }
+    }
+    questions.push({ question, options, correct });
+  }
+  if (questions.length === 0) return { questions: [], error: "No he encontrado ninguna fila con una pregunta rellenada." };
+  return { questions, error: null };
+}
 
 function matchColumn(headers, field) {
   const aliases = HEADER_ALIASES[field];
@@ -6395,6 +6452,45 @@ function AdminPanel({
   });
   const [fileError, setFileError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Autoguardado en el propio navegador: si se va la conexión, se cierra la
+  // pestaña sin querer, o el navegador se cierra solo, no se pierde el
+  // trabajo a medias — solo protege lo que aún no se había guardado de
+  // verdad en la base de datos, nunca sustituye al guardado real.
+  const AUTOSAVE_KEY = "mb_draft_autosave_v1";
+  const [recoveredDraft, setRecoveredDraft] = useState(null);
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(AUTOSAVE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.id === null && parsed.title && parsed.title.trim()) {
+          setRecoveredDraft(parsed);
+        }
+      }
+    } catch (e) {
+      // Sin localStorage disponible, o dato corrupto — simplemente no se ofrece recuperar nada.
+    }
+  }, []);
+  useEffect(() => {
+    if (tab !== "editor" || !draft.title?.trim()) return;
+    const t = setTimeout(() => {
+      try {
+        localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(draft));
+      } catch (e) {
+        // Si falla (por ejemplo, almacenamiento lleno), no pasa nada grave —
+        // el guardado real en la base de datos sigue funcionando igual.
+      }
+    }, 800);
+    return () => clearTimeout(t);
+  }, [draft, tab]);
+  function clearAutosave() {
+    try {
+      localStorage.removeItem(AUTOSAVE_KEY);
+    } catch (e) {}
+  }
+
   const [newEmployeeName, setNewEmployeeName] = useState("");
   const [newEmployeeEmail, setNewEmployeeEmail] = useState("");
   const [editingEmailFor, setEditingEmailFor] = useState(null);
@@ -6472,6 +6568,26 @@ function AdminPanel({
     setPendingWarnings(null);
     setTab("editor");
   }
+  // Duplicar: carga una copia dentro del editor con un id nuevo, sin guardar
+  // nada todavía — así el admin puede ajustar el título (u otra cosa) antes
+  // de confirmarla como una formación de verdad, en vez de crear un
+  // duplicado real de inmediato.
+  //
+  // Importante: los documentos adjuntos NO se copian. Si se copiaran tal
+  // cual, las dos formaciones compartirían el mismo archivo guardado por
+  // detrás — y borrar cualquiera de las dos borraría ese archivo para la
+  // otra también. Más seguro pedir que se vuelvan a subir en la copia.
+  function duplicateCourse(course) {
+    loadDraft({
+      ...course,
+      id: uid(),
+      title: `${course.title} (copia)`,
+      publishedAt: null,
+      attachments: [],
+      modules: (course.modules || []).map((m) => ({ ...m, attachments: [] })),
+    });
+    setDuplicateAttachmentsNotice((course.attachments?.length || 0) + (course.modules || []).reduce((s, m) => s + (m.attachments?.length || 0), 0));
+  }
   function setAssignmentMode(mode) {
     setDraft((d) => ({ ...d, assignment: { ...d.assignment, mode } }));
   }
@@ -6525,8 +6641,63 @@ function AdminPanel({
   function addQuestion() {
     setDraft((d) => ({ ...d, quiz: [...d.quiz, { ...emptyQuestion }] }));
   }
+  const [quizImportError, setQuizImportError] = useState("");
+  async function handleQuizImport(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const { questions, error } = await parseQuizExcelFile(file);
+    if (error) {
+      setQuizImportError(error);
+    } else {
+      setQuizImportError("");
+      setDraft((d) => ({ ...d, quiz: [...(d.quiz.length === 1 && !d.quiz[0].question.trim() ? [] : d.quiz), ...questions] }));
+    }
+    e.target.value = "";
+  }
+  const [moduleQuizImportError, setModuleQuizImportError] = useState("");
+  async function handleModuleQuizImport(mi, e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const { questions, error } = await parseQuizExcelFile(file);
+    if (error) {
+      setModuleQuizImportError(error);
+    } else {
+      setModuleQuizImportError("");
+      setDraft((d) => ({
+        ...d,
+        modules: d.modules.map((m, i) => (i === mi ? { ...m, quiz: [...(m.quiz.length === 1 && !m.quiz[0].question.trim() ? [] : m.quiz), ...questions] } : m)),
+      }));
+    }
+    e.target.value = "";
+  }
   function removeQuestion(qi) {
     setDraft((d) => ({ ...d, quiz: d.quiz.filter((_, i) => i !== qi) }));
+  }
+  // Arrastrar y soltar para reordenar preguntas — antes no había ninguna
+  // forma de reordenarlas salvo borrar y volver a crearlas en otro orden.
+  const [draggedQuestionIndex, setDraggedQuestionIndex] = useState(null);
+  function reorderQuestions(fromIndex, toIndex) {
+    if (fromIndex === toIndex) return;
+    setDraft((d) => {
+      const quiz = [...d.quiz];
+      const [moved] = quiz.splice(fromIndex, 1);
+      quiz.splice(toIndex, 0, moved);
+      return { ...d, quiz };
+    });
+  }
+  const [draggedModuleQuestionIndex, setDraggedModuleQuestionIndex] = useState(null);
+  function reorderModuleQuestions(mi, fromIndex, toIndex) {
+    if (fromIndex === toIndex) return;
+    setDraft((d) => ({
+      ...d,
+      modules: d.modules.map((m, i) => {
+        if (i !== mi) return m;
+        const quiz = [...m.quiz];
+        const [moved] = quiz.splice(fromIndex, 1);
+        quiz.splice(toIndex, 0, moved);
+        return { ...m, quiz };
+      }),
+    }));
   }
 
   // ---- Gestión de módulos (formaciones secuenciales) ----
@@ -6534,6 +6705,26 @@ function AdminPanel({
     id: uid(), title: "", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [],
     relatedCourses: [], externalLinks: [], practicalCase: null, checklistSteps: [],
   });
+  // Plantillas de partida: cambian solo la estructura (no rellenan texto de
+  // mentira que alguien pudiera olvidarse de borrar). "Protocolo simple"
+  // pone caducidad de 12 meses por defecto, algo muy típico en protocolos.
+  // "Formación con módulos" activa el modo por módulos con 3 ya creados,
+  // ahorrando los clics de activarlo y añadirlos uno a uno.
+  function applyTemplate(templateId) {
+    if (templateId === "protocolo") {
+      setDraft((d) => ({ ...d, category: "protocolos", validityMonths: 12 }));
+    } else if (templateId === "modular") {
+      setDraft((d) => ({
+        ...d,
+        modules: [
+          { ...NEW_MODULE_TEMPLATE(), title: "Módulo 1" },
+          { ...NEW_MODULE_TEMPLATE(), title: "Módulo 2" },
+          { ...NEW_MODULE_TEMPLATE(), title: "Módulo 3" },
+        ],
+      }));
+    }
+    setShowTemplatePicker(false);
+  }
   function toggleModularMode() {
     setDraft((d) => {
       const turningOn = !(d.modules && d.modules.length > 0);
@@ -6552,6 +6743,19 @@ function AdminPanel({
       const target = mi + direction;
       if (target < 0 || target >= modules.length) return d;
       [modules[mi], modules[target]] = [modules[target], modules[mi]];
+      return { ...d, modules };
+    });
+  }
+  // Arrastrar y soltar para reordenar módulos — además de las flechas de
+  // subir/bajar que ya había, no en su lugar, para que quien prefiera
+  // clicar en vez de arrastrar lo siga teniendo igual de fácil.
+  const [draggedModuleIndex, setDraggedModuleIndex] = useState(null);
+  function reorderModules(fromIndex, toIndex) {
+    if (fromIndex === toIndex) return;
+    setDraft((d) => {
+      const modules = [...d.modules];
+      const [moved] = modules.splice(fromIndex, 1);
+      modules.splice(toIndex, 0, moved);
       return { ...d, modules };
     });
   }
@@ -6702,6 +6906,7 @@ function AdminPanel({
     return warnings;
   }
   const [pendingWarnings, setPendingWarnings] = useState(null);
+  const [duplicateAttachmentsNotice, setDuplicateAttachmentsNotice] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   const [courseListSearch, setCourseListSearch] = useState("");
   const [courseListCategoryFilter, setCourseListCategoryFilter] = useState("");
@@ -6742,6 +6947,8 @@ function AdminPanel({
     }
     await onSaveCourse({ ...draft, id: draft.id || uid(), attachments: finalAttachments, modules: finalModules });
     setSaving(false);
+    clearAutosave();
+    setRecoveredDraft(null);
     resetDraft();
     setTab("courses");
   }
@@ -6948,11 +7155,38 @@ function AdminPanel({
 
       {tab === "courses" && (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+          {recoveredDraft && (
+            <div style={{ ...DS.card, padding: "var(--sp-3)", backgroundColor: "var(--info-soft)", border: "none", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <Save size={15} style={{ color: "var(--info)", flexShrink: 0 }} />
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--info)", flex: 1, minWidth: 200 }}>
+                Tienes un borrador sin guardar: <strong>"{recoveredDraft.title}"</strong>. ¿Lo recuperas o lo descartas?
+              </div>
+              <button
+                onClick={() => {
+                  loadDraft(recoveredDraft);
+                  setRecoveredDraft(null);
+                }}
+                style={{ fontSize: 11, fontWeight: 700, padding: "5px 12px", borderRadius: "var(--radius-md)", color: "white", backgroundColor: "var(--info)", border: "none", cursor: "pointer" }}
+              >
+                Recuperar
+              </button>
+              <button
+                onClick={() => {
+                  clearAutosave();
+                  setRecoveredDraft(null);
+                }}
+                style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", border: "none", background: "none", cursor: "pointer" }}
+              >
+                Descartar
+              </button>
+            </div>
+          )}
           <div style={{ display: "flex", gap: "var(--sp-2)", flexWrap: "wrap", alignItems: "center", marginBottom: "var(--sp-2)" }}>
             <button
               onClick={() => {
                 resetDraft();
                 setTab("editor");
+                setShowTemplatePicker(true);
               }}
               style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-sm)", fontWeight: 600, borderRadius: "var(--radius-md)", padding: "8px 14px", color: "var(--text-inverse)", backgroundColor: "var(--brand)", border: "none", cursor: "pointer" }}
             >
@@ -7046,6 +7280,9 @@ function AdminPanel({
                             <button onClick={() => loadDraft(c)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--info)", background: "none", border: "none", cursor: "pointer" }}>
                               Editar
                             </button>
+                            <button onClick={() => duplicateCourse(c)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--text-secondary)", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                              <Copy size={13} /> Duplicar
+                            </button>
                             <button
                               onClick={() => onSetCourseArchived(c.id, !c.archived)}
                               style={{ fontSize: "var(--text-xs)", fontWeight: 600, padding: "6px 10px", borderRadius: "var(--radius-md)", color: "var(--warning)", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
@@ -7069,8 +7306,88 @@ function AdminPanel({
         </div>
       )}
 
+      {showTemplatePicker && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 95, backgroundColor: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", padding: "var(--sp-4)" }}>
+          <div style={{ ...DS.card, maxWidth: 480, width: "100%", padding: "var(--sp-5)" }}>
+            <h3 style={{ fontSize: "var(--text-lg)", fontWeight: 700, color: "var(--text-primary)", margin: "0 0 var(--sp-1)" }}>¿Cómo quieres empezar?</h3>
+            <p style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: "0 0 var(--sp-4)" }}>Puedes cambiarlo todo después — esto solo decide el punto de partida.</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+              <button
+                onClick={() => setShowTemplatePicker(false)}
+                style={{ ...DS.card, textAlign: "left", padding: "var(--sp-3)", cursor: "pointer", border: "1px solid var(--border)" }}
+              >
+                <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>En blanco</div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Sin nada predefinido, tú decides cada campo.</div>
+              </button>
+              <button
+                onClick={() => applyTemplate("protocolo")}
+                style={{ ...DS.card, textAlign: "left", padding: "var(--sp-3)", cursor: "pointer", border: "1px solid var(--border)" }}
+              >
+                <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>Protocolo simple</div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Categoría "Protocolos" y caducidad a 12 meses ya puestas — lo típico en un protocolo.</div>
+              </button>
+              <button
+                onClick={() => applyTemplate("modular")}
+                style={{ ...DS.card, textAlign: "left", padding: "var(--sp-3)", cursor: "pointer", border: "1px solid var(--border)" }}
+              >
+                <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>Formación con módulos</div>
+                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Ya con 3 módulos creados y listos para rellenar, sin ir añadiéndolos uno a uno.</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {tab === "editor" && (
         <div className="rounded-xl border bg-white p-4 space-y-4 shadow-sm" style={{ borderColor: "#00000012" }}>
+          {duplicateAttachmentsNotice > 0 && (
+            <div style={{ ...DS.card, padding: "var(--sp-3)", backgroundColor: "var(--warning-soft)", border: "none", display: "flex", alignItems: "center", gap: 8 }}>
+              <AlertTriangle size={15} style={{ color: "var(--warning)", flexShrink: 0 }} />
+              <div style={{ fontSize: "var(--text-xs)", color: "var(--warning-text)" }}>
+                Esta es una copia — {duplicateAttachmentsNotice} documento{duplicateAttachmentsNotice === 1 ? "" : "s"} adjunto{duplicateAttachmentsNotice === 1 ? "" : "s"} del original no se ha{duplicateAttachmentsNotice === 1 ? "" : "n"} copiado (para no compartir el mismo archivo entre las dos). Vuelve a subirlo{duplicateAttachmentsNotice === 1 ? "" : "s"} aquí si hace falta.
+              </div>
+              <button onClick={() => setDuplicateAttachmentsNotice(0)} style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: "var(--warning-text)", flexShrink: 0 }}><X size={14} /></button>
+            </div>
+          )}
+
+          {/* Qué falta por rellenar, siempre visible mientras editas */}
+          {(() => {
+            const hasContent = !!(draft.videoUrl?.trim() || (draft.attachments || []).length > 0 || (draft.modules || []).length > 0);
+            const hasTest =
+              draft.testMode === "ninguno" ||
+              (draft.testMode === "googleform" && !!draft.googleFormUrl?.trim()) ||
+              (draft.testMode === "interno" && (draft.quiz || []).some((q) => q.question.trim())) ||
+              ((draft.modules || []).length > 0 && (draft.modules || []).every((m) => m.quiz.length === 0 || m.quiz.some((q) => q.question.trim())));
+            const hasAssignment =
+              draft.assignment.mode === "todos" ||
+              (draft.assignment.mode === "grupos" && (draft.assignment.groupIds || []).length > 0) ||
+              (draft.assignment.mode === "individual" && (draft.assignment.employeeNames || []).length > 0);
+            const checklist = [
+              { label: "Título", ok: !!draft.title.trim() },
+              { label: "Descripción", ok: !!draft.description.trim() },
+              { label: "Contenido", ok: hasContent },
+              { label: "Test", ok: hasTest },
+              { label: "Asignación", ok: hasAssignment },
+            ];
+            return (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "var(--sp-2) 0" }}>
+                {checklist.map((item) => (
+                  <span
+                    key={item.label}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600,
+                      padding: "3px 9px", borderRadius: "var(--radius-full)",
+                      backgroundColor: item.ok ? "var(--success-soft)" : "var(--bg-inset)",
+                      color: item.ok ? "var(--success-text)" : "var(--text-muted)",
+                    }}
+                  >
+                    {item.ok ? <Check size={11} /> : <X size={11} />} {item.label}
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
+
           <TextInput label="Título de la formación" value={draft.title} onChange={(v) => setDraft((d) => ({ ...d, title: v }))} placeholder="Ej. Protocolo de picking pasillo 4" />
 
           <label className="block text-xs font-semibold text-gray-500 mb-1">
@@ -7178,8 +7495,24 @@ function AdminPanel({
             <div className="space-y-3">
               <div className="text-xs font-semibold text-gray-500 -mb-1">Módulos, en el orden en que se desbloquean</div>
               {draft.modules.map((mod, mi) => (
-                <div key={mod.id} className="rounded-lg border p-3 space-y-2.5" style={{ borderColor: "#00000018", backgroundColor: "white" }}>
+                <div
+                  key={mod.id}
+                  draggable
+                  onDragStart={() => setDraggedModuleIndex(mi)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (draggedModuleIndex !== null) reorderModules(draggedModuleIndex, mi);
+                    setDraggedModuleIndex(null);
+                  }}
+                  onDragEnd={() => setDraggedModuleIndex(null)}
+                  className="rounded-lg border p-3 space-y-2.5"
+                  style={{ borderColor: "#00000018", backgroundColor: "white", opacity: draggedModuleIndex === mi ? 0.4 : 1 }}
+                >
                   <div className="flex items-center gap-2">
+                    <span style={{ cursor: "grab", color: "var(--text-muted)", flexShrink: 0, display: "flex" }} title="Arrastra para reordenar">
+                      <GripVertical size={15} />
+                    </span>
                     <span className="flex-shrink-0 flex items-center justify-center rounded-full font-bold text-white text-xs" style={{ backgroundColor: "var(--brand)", width: 22, height: 22 }}>
                       {mi + 1}
                     </span>
@@ -7350,7 +7683,7 @@ function AdminPanel({
                     </div>
                   ) : (
                     <>
-                      <div className="flex items-center justify-end gap-2">
+                      <div className="flex items-center justify-end gap-2 flex-wrap">
                         <label className="text-[11px] text-gray-400 flex items-center gap-1">
                           % para aprobar
                           <input
@@ -7361,14 +7694,38 @@ function AdminPanel({
                             style={{ borderColor: "#00000018" }}
                           />
                         </label>
+                        <label className="text-[11px] font-semibold flex items-center gap-1" style={{ color: BRAND.blue, cursor: "pointer" }}>
+                          <Upload size={11} /> Importar Excel
+                          <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => handleModuleQuizImport(mi, e)} style={{ display: "none" }} />
+                        </label>
                         <button onClick={() => addModuleQuestion(mi)} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
                           <Plus size={12} /> Pregunta
                         </button>
                       </div>
+                      {moduleQuizImportError && <div className="text-[11px] mb-1" style={{ color: "var(--danger)" }}>{moduleQuizImportError}</div>}
 
                       {mod.quiz.map((q, qi) => (
-                        <div key={qi} className="rounded-md p-2 space-y-1.5" style={{ backgroundColor: "var(--bg-inset)" }}>
+                        <div
+                          key={qi}
+                          draggable
+                          onDragStart={() => setDraggedModuleQuestionIndex(`${mi}-${qi}`)}
+                          onDragOver={(e) => e.preventDefault()}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            if (draggedModuleQuestionIndex !== null) {
+                              const [dmi, dqi] = draggedModuleQuestionIndex.split("-").map(Number);
+                              if (dmi === mi) reorderModuleQuestions(mi, dqi, qi);
+                            }
+                            setDraggedModuleQuestionIndex(null);
+                          }}
+                          onDragEnd={() => setDraggedModuleQuestionIndex(null)}
+                          className="rounded-md p-2 space-y-1.5"
+                          style={{ backgroundColor: "var(--bg-inset)", opacity: draggedModuleQuestionIndex === `${mi}-${qi}` ? 0.4 : 1 }}
+                        >
                           <div className="flex items-center gap-2">
+                            <span style={{ cursor: "grab", color: "var(--text-muted)", flexShrink: 0, display: "flex" }} title="Arrastra para reordenar">
+                              <GripVertical size={13} />
+                            </span>
                             <input
                               value={q.question}
                               onChange={(e) => updateModuleQuestion(mi, qi, "question", e.target.value)}
@@ -7455,14 +7812,38 @@ function AdminPanel({
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <div className="text-xs font-semibold text-gray-500">Preguntas del test</div>
-                  <button onClick={addQuestion} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
-                    <Plus size={13} /> Añadir pregunta
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue, cursor: "pointer" }}>
+                      <Upload size={13} /> Importar desde Excel
+                      <input type="file" accept=".xlsx,.xls,.csv" onChange={handleQuizImport} style={{ display: "none" }} />
+                    </label>
+                    <button onClick={addQuestion} className="text-xs font-semibold flex items-center gap-1" style={{ color: BRAND.blue }}>
+                      <Plus size={13} /> Añadir pregunta
+                    </button>
+                  </div>
                 </div>
+                {quizImportError && <div className="text-xs mb-2" style={{ color: "var(--danger)" }}>{quizImportError}</div>}
+                <div className="text-[11px] text-gray-400 mb-2">Columnas: Pregunta, Opción 1-4, y Correcta (número 1-4, letra a-d, o el texto exacto de la opción).</div>
                 <div className="space-y-3">
                   {draft.quiz.map((q, qi) => (
-                    <div key={qi} className="rounded-lg border p-3" style={{ borderColor: "#00000018" }}>
+                    <div
+                      key={qi}
+                      draggable
+                      onDragStart={() => setDraggedQuestionIndex(qi)}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (draggedQuestionIndex !== null) reorderQuestions(draggedQuestionIndex, qi);
+                        setDraggedQuestionIndex(null);
+                      }}
+                      onDragEnd={() => setDraggedQuestionIndex(null)}
+                      className="rounded-lg border p-3"
+                      style={{ borderColor: "#00000018", opacity: draggedQuestionIndex === qi ? 0.4 : 1 }}
+                    >
                       <div className="flex items-center justify-between gap-2 mb-2">
+                        <span style={{ cursor: "grab", color: "var(--text-muted)", flexShrink: 0, display: "flex" }} title="Arrastra para reordenar">
+                          <GripVertical size={14} />
+                        </span>
                         <input value={q.question} onChange={(e) => updateQuizQuestion(qi, "question", e.target.value)} placeholder={`Pregunta ${qi + 1}`} className="flex-1 text-sm rounded-md border px-2 py-1.5" style={{ borderColor: "#00000020" }} />
                         {draft.quiz.length > 1 && (
                           <button onClick={() => removeQuestion(qi)} className="text-red-500">
