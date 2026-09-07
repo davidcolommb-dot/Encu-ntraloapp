@@ -136,6 +136,16 @@ function isChecklistComplete(puesto, responseEntry) {
   return puesto.checklistItems.every((item) => !!responses[item.id]?.level);
 }
 
+// Una ruta cuenta como "completada del todo" cuando cada formación que la
+// forma está, ella misma, en estado "completada" para esa persona — usa
+// getStatus, así que la caducidad/recertificación ya queda contemplada sin
+// tener que repetir esa lógica aquí.
+function isPathFullyCompleted(path, courses, userName, getStatus) {
+  const pathCourses = path.courseIds.map((id) => courses.find((c) => c.id === id)).filter(Boolean);
+  if (pathCourses.length === 0) return false;
+  return pathCourses.every((c) => getStatus(userName, c.id) === "completada");
+}
+
 // El plazo de un checklist es relativo a cuándo se le asignó el puesto a esa
 // persona en concreto (no una fecha fija para todos, porque cada quien puede
 // empezar en un momento distinto) — solo aplica si el puesto tiene definidos
@@ -409,6 +419,14 @@ function isAssignedToUser(course, userName, groups) {
   // Una formación archivada no le llega a nadie, aunque en teoría le tocara
   // por su asignación — archivar la quita de en medio sin borrar nada.
   if (course.archived) return false;
+  return isAssignedIgnoringArchived(course, userName, groups);
+}
+
+// Igual que isAssignedToUser, pero sin el filtro de archivado — pensada
+// exclusivamente para calcular lo que alguien YA ganó (puntos, insignias).
+// Archivar una formación es para despejar el catálogo, nunca para quitarle a
+// nadie algo que ya se había ganado por completarla.
+function isAssignedIgnoringArchived(course, userName, groups) {
   const a = course.assignment;
   if (!a) return true;
   // Nombres añadidos automáticamente (p. ej. por la ruta de bienvenida al dar de
@@ -447,12 +465,18 @@ function computeEmployeeCompliance(employees, courses, groups, completionsByCour
       // El caso práctico puede estar "enviado" incluso antes de que la
       // formación entera cuente como completada (o justo al mismo tiempo) —
       // se marca para corregir en cuanto llega, sin esperar a nada más.
-      const pendingCaseReview = !!c.practicalCase && rec?.practicalCaseAnswer?.status === "enviado";
+      const courseCaseReview = !!c.practicalCase && rec?.practicalCaseAnswer?.status === "enviado";
+      // Lo mismo, pero con los casos prácticos que puede tener cada módulo
+      // por separado — antes no se contaban en absoluto.
+      const modulePendingCases = (c.modules || [])
+        .filter((m) => m.practicalCase && rec?.moduleProgress?.[m.id]?.practicalCaseAnswer?.status === "enviado")
+        .map((m) => ({ moduleId: m.id, moduleTitle: m.title }));
+      const pendingCaseReview = courseCaseReview || modulePendingCases.length > 0;
       if (done) completed++;
       if (overdue) overdueCount++;
       if (pendingFormReview) needsFormReview++;
-      if (pendingCaseReview) needsCaseReview++;
-      courseDetails.push({ course: c, record: rec, done, overdue, expired, pendingFormReview, pendingCaseReview });
+      if (pendingCaseReview) needsCaseReview += (courseCaseReview ? 1 : 0) + modulePendingCases.length;
+      courseDetails.push({ course: c, record: rec, done, overdue, expired, pendingFormReview, pendingCaseReview, courseCaseReview, modulePendingCases });
     }
     const percent = totalAssigned > 0 ? Math.round((completed / totalAssigned) * 100) : 100;
     return { employee: emp, totalAssigned, completed, overdueCount, needsFormReview, needsCaseReview, percent, courseDetails };
@@ -462,7 +486,7 @@ function computeEmployeeCompliance(employees, courses, groups, completionsByCour
 // Panel de cumplimiento reutilizable: lo usan tanto el Admin completo (con
 // todos los empleados) como el panel "Mi equipo" de un responsable (con solo
 // los suyos) — misma calidad de herramienta para los dos casos.
-function ComplianceView({ employees, courses, groups, completionsByCourse, onMarkFormReviewed, puestos = [], checklistResponses = {}, onValidateChecklistItem, myManagedGroupIds = null }) {
+function ComplianceView({ employees, courses, groups, completionsByCourse, onMarkFormReviewed, puestos = [], checklistResponses = {}, onValidateChecklistItem, myManagedGroupIds = null, onCorrectPracticalCase, onCorrectModulePracticalCase }) {
   const [viewMode, setViewMode] = useState("person"); // "person" | "course"
   const [personSearch, setPersonSearch] = useState("");
   const [personSort, setPersonSort] = useState("overdue");
@@ -543,12 +567,13 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
         </div>
       </div>
 
-      {/* Alternar entre ver por persona, por formación, o por checklist de puesto */}
+      {/* Alternar entre ver por persona, por formación, por checklist de puesto, o comparar departamentos */}
       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
         {[
           { id: "person", label: "Por persona" },
           { id: "course", label: "Por formación" },
           ...((myManagedGroupIds === null ? puestos.length > 0 : puestos.some((p) => p.groupId && myManagedGroupIds.includes(p.groupId))) ? [{ id: "checklist", label: "Checklists de puesto" }] : []),
+          ...(myManagedGroupIds === null && groups.length > 1 ? [{ id: "departments", label: "Comparar departamentos" }] : []),
         ].map((m) => (
           <button
             key={m.id}
@@ -617,27 +642,114 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
                     {isExpanded && (
                       <div style={{ padding: "0 var(--sp-3) var(--sp-3)", display: "flex", flexDirection: "column", gap: 6 }}>
                         {c.courseDetails.length === 0 && <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Sin formaciones asignadas.</div>}
-                        {c.courseDetails.map((d) => (
-                          <div key={d.course.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "6px 8px", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-inset)", flexWrap: "wrap" }}>
-                            <span style={{ fontSize: "var(--text-xs)", color: "var(--text-primary)" }}>{d.course.title}</span>
-                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                              {d.pendingFormReview && (
-                                <button
-                                  onClick={() => onMarkFormReviewed(d.course.id, c.employee.name)}
-                                  title="Marcar como revisado tras comprobar sus respuestas en el propio Google Form"
-                                  style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--info-soft)", color: "var(--info)", border: "none", cursor: "pointer" }}
-                                >
-                                  <FileText size={10} /> Revisar Form
-                                </button>
-                              )}
-                              <StatusPill
-                                icon={d.done ? CheckCircle2 : d.overdue ? AlertTriangle : Clock}
-                                label={d.done ? "Completada" : d.overdue ? "Vencida" : d.expired ? "Caducada" : "Pendiente"}
-                                variant={d.done ? "success" : d.overdue ? "danger" : "warning"}
-                              />
+                        {c.courseDetails.map((d) => {
+                          const courseCaseKey = `${d.course.id}::course::${c.employee.name}`;
+                          return (
+                          <div key={d.course.id} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "6px 8px", borderRadius: "var(--radius-md)", backgroundColor: "var(--bg-inset)" }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: "var(--text-xs)", color: "var(--text-primary)" }}>{d.course.title}</span>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                {d.pendingFormReview && (
+                                  <button
+                                    onClick={() => onMarkFormReviewed(d.course.id, c.employee.name)}
+                                    title="Marcar como revisado tras comprobar sus respuestas en el propio Google Form"
+                                    style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--info-soft)", color: "var(--info)", border: "none", cursor: "pointer" }}
+                                  >
+                                    <FileText size={10} /> Revisar Form
+                                  </button>
+                                )}
+                                {d.courseCaseReview && (
+                                  <button
+                                    onClick={() => { setCorrectingCase(courseCaseKey); setCorrectionText(""); }}
+                                    style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--warning-soft)", color: "var(--warning)", border: "none", cursor: "pointer" }}
+                                  >
+                                    <ClipboardList size={10} /> Corregir caso
+                                  </button>
+                                )}
+                                {d.modulePendingCases.map((mc) => (
+                                  <button
+                                    key={mc.moduleId}
+                                    onClick={() => { setCorrectingCase(`${d.course.id}::${mc.moduleId}::${c.employee.name}`); setCorrectionText(""); }}
+                                    style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--warning-soft)", color: "var(--warning)", border: "none", cursor: "pointer" }}
+                                  >
+                                    <ClipboardList size={10} /> Corregir caso ({mc.moduleTitle})
+                                  </button>
+                                ))}
+                                <StatusPill
+                                  icon={d.done ? CheckCircle2 : d.overdue ? AlertTriangle : Clock}
+                                  label={d.done ? "Completada" : d.overdue ? "Vencida" : d.expired ? "Caducada" : "Pendiente"}
+                                  variant={d.done ? "success" : d.overdue ? "danger" : "warning"}
+                                />
+                              </div>
                             </div>
+
+                            {correctingCase === courseCaseKey && (
+                              <div style={{ ...DS.card, padding: "var(--sp-3)" }}>
+                                <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4 }}>RESPUESTA DE {c.employee.name.toUpperCase()}</div>
+                                <div style={{ fontSize: "var(--text-xs)", color: "var(--text-primary)", whiteSpace: "pre-line", marginBottom: 8, backgroundColor: "var(--bg-inset)", padding: "var(--sp-2)", borderRadius: "var(--radius-md)" }}>
+                                  {d.record?.practicalCaseAnswer?.text}
+                                </div>
+                                <textarea
+                                  value={correctionText}
+                                  onChange={(e) => setCorrectionText(e.target.value)}
+                                  placeholder="Escribe tu corrección o comentario..."
+                                  rows={3}
+                                  style={{ width: "100%", fontSize: "var(--text-xs)", padding: "6px 8px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", marginBottom: 8 }}
+                                />
+                                <div style={{ display: "flex", gap: 6 }}>
+                                  <button
+                                    disabled={!correctionText.trim()}
+                                    onClick={() => {
+                                      onCorrectPracticalCase(d.course.id, c.employee.name, correctionText);
+                                      setCorrectingCase(null);
+                                    }}
+                                    style={{ fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: "var(--radius-md)", color: "white", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !correctionText.trim() ? 0.4 : 1 }}
+                                  >
+                                    Enviar corrección
+                                  </button>
+                                  <button onClick={() => setCorrectingCase(null)} style={{ fontSize: 11, color: "var(--text-muted)", border: "none", background: "none", cursor: "pointer" }}>Cancelar</button>
+                                </div>
+                              </div>
+                            )}
+
+                            {d.modulePendingCases.map((mc) => {
+                              const moduleCaseKey = `${d.course.id}::${mc.moduleId}::${c.employee.name}`;
+                              if (correctingCase !== moduleCaseKey) return null;
+                              const moduleRec = d.record?.moduleProgress?.[mc.moduleId];
+                              return (
+                                <div key={mc.moduleId} style={{ ...DS.card, padding: "var(--sp-3)" }}>
+                                  <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginBottom: 4 }}>
+                                    RESPUESTA DE {c.employee.name.toUpperCase()} — {mc.moduleTitle.toUpperCase()}
+                                  </div>
+                                  <div style={{ fontSize: "var(--text-xs)", color: "var(--text-primary)", whiteSpace: "pre-line", marginBottom: 8, backgroundColor: "var(--bg-inset)", padding: "var(--sp-2)", borderRadius: "var(--radius-md)" }}>
+                                    {moduleRec?.practicalCaseAnswer?.text}
+                                  </div>
+                                  <textarea
+                                    value={correctionText}
+                                    onChange={(e) => setCorrectionText(e.target.value)}
+                                    placeholder="Escribe tu corrección o comentario..."
+                                    rows={3}
+                                    style={{ width: "100%", fontSize: "var(--text-xs)", padding: "6px 8px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", marginBottom: 8 }}
+                                  />
+                                  <div style={{ display: "flex", gap: 6 }}>
+                                    <button
+                                      disabled={!correctionText.trim()}
+                                      onClick={() => {
+                                        onCorrectModulePracticalCase(d.course.id, mc.moduleId, c.employee.name, correctionText);
+                                        setCorrectingCase(null);
+                                      }}
+                                      style={{ fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: "var(--radius-md)", color: "white", backgroundColor: "var(--brand)", border: "none", cursor: "pointer", opacity: !correctionText.trim() ? 0.4 : 1 }}
+                                    >
+                                      Enviar corrección
+                                    </button>
+                                    <button onClick={() => setCorrectingCase(null)} style={{ fontSize: 11, color: "var(--text-muted)", border: "none", background: "none", cursor: "pointer" }}>Cancelar</button>
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -800,6 +912,81 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
                     </div>
                   );
                 })}
+              </div>
+            );
+          })()}
+        </div>
+      ) : viewMode === "departments" ? (
+        <div>
+          {(() => {
+            const deptStats = groups.map((g) => {
+              const members = employees.filter((e) => (g.memberNames || []).includes(e.name));
+              const memberCompliance = computeEmployeeCompliance(members, courses, groups, completionsByCourse);
+              const avgPercent = memberCompliance.length ? Math.round(memberCompliance.reduce((s, c) => s + c.percent, 0) / memberCompliance.length) : null;
+              const totalOverdue = memberCompliance.reduce((s, c) => s + c.overdueCount, 0);
+
+              // Si este departamento tiene uno o varios puestos con checklist,
+              // calculamos también qué porcentaje de sus ítems ya se ha evaluado.
+              const deptPuestos = puestos.filter((p) => p.groupId === g.id);
+              let checklistPercent = null;
+              if (deptPuestos.length > 0) {
+                let totalItems = 0, answeredItems = 0;
+                for (const p of deptPuestos) {
+                  const peopleWithThisPuesto = employees.filter((e) => e.puestoId === p.id);
+                  for (const person of peopleWithThisPuesto) {
+                    const responses = checklistResponses[person.name]?.responses || {};
+                    totalItems += p.checklistItems.length;
+                    answeredItems += p.checklistItems.filter((i) => !!responses[i.id]?.level).length;
+                  }
+                }
+                if (totalItems > 0) checklistPercent = Math.round((answeredItems / totalItems) * 100);
+              }
+
+              return { group: g, memberCount: members.length, avgPercent, totalOverdue, checklistPercent };
+            });
+            const sorted = [...deptStats].sort((a, b) => (a.avgPercent ?? 999) - (b.avgPercent ?? 999));
+            const withData = sorted.filter((d) => d.memberCount > 0);
+            const withoutData = sorted.filter((d) => d.memberCount === 0);
+
+            if (withData.length === 0) {
+              return <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Ningún departamento tiene miembros todavía.</div>;
+            }
+
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Ordenados de peor a mejor cumplimiento medio.</div>
+                {withData.map((d) => (
+                  <div key={d.group.id} style={{ ...DS.card, padding: "var(--sp-3)" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{d.group.name}</span>
+                        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{d.memberCount} persona{d.memberCount === 1 ? "" : "s"}</span>
+                      </div>
+                      {d.totalOverdue > 0 && <StatusPill icon={AlertTriangle} label={`${d.totalOverdue} vencida${d.totalOverdue === 1 ? "" : "s"} en total`} variant="danger" />}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: d.checklistPercent !== null ? 8 : 0 }}>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)", width: 110, flexShrink: 0 }}>Formaciones</span>
+                      <div style={{ flex: 1, height: 7, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${d.avgPercent}%`, backgroundColor: d.avgPercent === 100 ? "var(--success)" : d.avgPercent < 50 ? "var(--danger)" : "var(--brand)", borderRadius: "var(--radius-full)" }} />
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 36, textAlign: "right" }}>{d.avgPercent}%</span>
+                    </div>
+                    {d.checklistPercent !== null && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 11, color: "var(--text-muted)", width: 110, flexShrink: 0 }}>Checklist puesto</span>
+                        <div style={{ flex: 1, height: 7, borderRadius: "var(--radius-full)", backgroundColor: "var(--bg-inset)", overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${d.checklistPercent}%`, backgroundColor: d.checklistPercent === 100 ? "var(--success)" : "var(--info)", borderRadius: "var(--radius-full)" }} />
+                        </div>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 36, textAlign: "right" }}>{d.checklistPercent}%</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {withoutData.length > 0 && (
+                  <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
+                    Sin miembros todavía: {withoutData.map((d) => d.group.name).join(", ")}
+                  </div>
+                )}
               </div>
             );
           })()}
@@ -2453,7 +2640,7 @@ export default function AulaVirtualMB() {
   async function submitModulePracticalCase(courseId, moduleId, text) {
     if (!currentUser || !text.trim()) return;
     await recomputeModuleState(courseId, moduleId, {
-      practicalCaseAnswer: { text: text.trim(), submittedAt: todayISO() },
+      practicalCaseAnswer: { text: text.trim(), submittedAt: todayISO(), status: "enviado" },
     });
   }
 
@@ -2537,6 +2724,36 @@ export default function AulaVirtualMB() {
     await saveKey(`mb_completions_course_${courseId}`, updated);
   }
 
+  // Igual que correctPracticalCase, pero para el caso práctico DENTRO de un
+  // módulo concreto, que se guarda anidado en moduleProgress — se le había
+  // construido su envío pero nunca su corrección.
+  async function correctModulePracticalCase(courseId, moduleId, employeeName, feedback) {
+    const current = await loadKey(`mb_completions_course_${courseId}`, {});
+    const moduleRec = current[employeeName]?.moduleProgress?.[moduleId];
+    if (!moduleRec?.practicalCaseAnswer) return;
+    const updated = {
+      ...current,
+      [employeeName]: {
+        ...current[employeeName],
+        moduleProgress: {
+          ...current[employeeName].moduleProgress,
+          [moduleId]: {
+            ...moduleRec,
+            practicalCaseAnswer: {
+              ...moduleRec.practicalCaseAnswer,
+              status: "corregido",
+              feedback: feedback.trim(),
+              correctedBy: currentUser || "Administrador",
+              correctedAt: todayISO(),
+            },
+          },
+        },
+      },
+    };
+    setCompletionsByCourse((prevState) => ({ ...prevState, [courseId]: updated }));
+    await saveKey(`mb_completions_course_${courseId}`, updated);
+  }
+
   // Valoración (1-5 estrellas + comentario opcional). Ahora es el paso que
   // realmente cierra una formación: si estaba "a la espera de valoración"
   // (awaitingRating), al valorar pasa a "completada" de verdad, con fecha de
@@ -2613,6 +2830,14 @@ export default function AulaVirtualMB() {
     return courses.filter((c) => isAssignedToUser(c, currentUser, groups) && getStatus(currentUser, c.id) === "completada");
   }, [courses, completionsByCourse, currentUser, groups]);
 
+  // Para puntos e insignias: cuenta TODO lo que la persona alguna vez
+  // completó, aunque esa formación se haya archivado después — archivar es
+  // para despejar el catálogo, nunca para quitarle a nadie algo ya ganado.
+  const completedForUserIncludingArchived = useMemo(() => {
+    if (!currentUser) return [];
+    return courses.filter((c) => isAssignedIgnoringArchived(c, currentUser, groups) && getStatus(currentUser, c.id) === "completada");
+  }, [courses, completionsByCourse, currentUser, groups]);
+
   // Alertas: solo lo que ya venció, o lo que vence en 3 días o menos.
   const overdueForUser = useMemo(() => pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) < 0), [pendingForUser]);
   const dueSoonForUser = useMemo(() => pendingForUser.filter((c) => c.deadline && daysUntil(c.deadline) >= 0 && daysUntil(c.deadline) <= 3), [pendingForUser]);
@@ -2674,18 +2899,21 @@ export default function AulaVirtualMB() {
   }, [completedForUser, assignedCountForUser, currentUser]);
 
   const POINTS_PER_COURSE = 100;
-  const pointsForUser = useMemo(() => completedForUser.length * POINTS_PER_COURSE, [completedForUser]);
+  const pointsForUser = useMemo(() => completedForUserIncludingArchived.length * POINTS_PER_COURSE, [completedForUserIncludingArchived]);
   const levelForUser = useMemo(() => levelForPoints(pointsForUser), [pointsForUser]);
 
   const badgesForUser = useMemo(() => {
     if (!currentUser) return [];
     const badges = [];
-    const n = completedForUser.length;
+    const n = completedForUserIncludingArchived.length;
     if (n >= 1) badges.push({ id: "first", label: "Primera formación completada", icon: Star });
     if (n >= 5) badges.push({ id: "five", label: "5 formaciones completadas", icon: Award });
     if (n >= 10) badges.push({ id: "ten", label: "10 formaciones completadas", icon: Trophy });
     for (const cat of CATEGORIES) {
-      const assignedInCat = courses.filter((c) => c.category === cat.id && isAssignedToUser(c, currentUser, groups));
+      // Igual que con los puntos: si alguien ya se había hecho todas las
+      // formaciones de una categoría y luego se archiva alguna, la insignia
+      // de "Experto" no debe desaparecer por eso.
+      const assignedInCat = courses.filter((c) => c.category === cat.id && isAssignedIgnoringArchived(c, currentUser, groups));
       if (assignedInCat.length > 0 && assignedInCat.every((c) => getStatus(currentUser, c.id) === "completada")) {
         badges.push({ id: `cat-${cat.id}`, label: `Experto en ${cat.label}`, icon: cat.icon });
       }
@@ -2693,8 +2921,11 @@ export default function AulaVirtualMB() {
     if (assignedCountForUser > 0 && pendingForUser.length === 0) {
       badges.push({ id: "uptodate", label: "Al día con todo", icon: PartyPopper });
     }
+    if (pathsForUser.length > 0 && pathsForUser.every((p) => isPathFullyCompleted(p, courses, currentUser, getStatus))) {
+      badges.push({ id: "path-master", label: "Ruta completada", icon: Map });
+    }
     return badges;
-  }, [completedForUser, courses, currentUser, groups, pendingForUser, assignedCountForUser]);
+  }, [completedForUserIncludingArchived, courses, currentUser, groups, pendingForUser, assignedCountForUser, pathsForUser, completionsByCourse]);
 
   async function addGroup(name) {
     if (!name.trim() || groups.some((g) => g.name === name.trim())) return;
@@ -2961,6 +3192,25 @@ export default function AulaVirtualMB() {
     setEmployees(updated);
     saveKey("mb_employees", updated);
     if (currentUser === name) setCurrentUser("");
+
+    // Se le quita también de cualquier grupo al que perteneciera — si no, se
+    // queda "fantasma" en la lista de miembros de un equipo del que ya no
+    // forma parte.
+    const affectedGroups = groups.filter((g) => (g.memberNames || []).includes(name));
+    if (affectedGroups.length > 0) {
+      const updatedGroups = groups.map((g) => ((g.memberNames || []).includes(name) ? { ...g, memberNames: g.memberNames.filter((n) => n !== name) } : g));
+      setGroups(updatedGroups);
+      await saveKey("mb_groups", updatedGroups);
+    }
+
+    // Y su checklist de puesto, si tenía uno — igual que al borrar el propio
+    // puesto, no tiene sentido dejarlo apuntando a alguien que ya no existe.
+    if (checklistResponses[name]) {
+      const updatedChecklist = { ...checklistResponses };
+      delete updatedChecklist[name];
+      setChecklistResponses(updatedChecklist);
+      await saveKey("mb_checklist_responses", updatedChecklist);
+    }
   }
   // Borra la contraseña de alguien (no se puede "ver", solo restablecer) — la
   // próxima vez que esa persona entre, tendrá que crear una contraseña nueva
@@ -3034,6 +3284,17 @@ export default function AulaVirtualMB() {
       }
     }
     setCompletionsByCourse((prev) => ({ ...prev, ...freshCompletions }));
+
+    // El checklist de puesto se guarda por nombre — hay que renombrar la
+    // clave igual que hicimos arriba con el progreso de formaciones, o el
+    // historial de evaluación se queda huérfano apuntando al nombre antiguo.
+    if (checklistResponses[oldName]) {
+      const updatedChecklist = { ...checklistResponses };
+      updatedChecklist[trimmed] = updatedChecklist[oldName];
+      delete updatedChecklist[oldName];
+      setChecklistResponses(updatedChecklist);
+      await saveKey("mb_checklist_responses", updatedChecklist);
+    }
 
     if (currentUser === oldName) {
       setCurrentUser(trimmed);
@@ -3563,6 +3824,8 @@ export default function AulaVirtualMB() {
             onAssignPuesto={assignPuesto}
             checklistResponses={checklistResponses}
             onValidateChecklistItem={validateChecklistItem}
+            onCorrectPracticalCase={correctPracticalCase}
+            onCorrectModulePracticalCase={correctModulePracticalCase}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
@@ -3608,6 +3871,8 @@ export default function AulaVirtualMB() {
             onAssignPuesto={assignPuesto}
             checklistResponses={checklistResponses}
             onValidateChecklistItem={validateChecklistItem}
+            onCorrectPracticalCase={correctPracticalCase}
+            onCorrectModulePracticalCase={correctModulePracticalCase}
             onRenameEmployee={renameEmployee}
             onImportEmployeesBulk={importEmployeesBulk}
             onAddGroup={addGroup}
@@ -5977,6 +6242,8 @@ function AdminPanel({
   onAssignPuesto,
   checklistResponses,
   onValidateChecklistItem,
+  onCorrectPracticalCase,
+  onCorrectModulePracticalCase,
   mode = "full",
   restrictToGroupIds = [],
 }) {
@@ -7944,7 +8211,7 @@ function AdminPanel({
           )}
 
           <div className="rounded-xl border bg-white p-4 shadow-sm" style={{ borderColor: "#00000012" }}>
-            <ComplianceView employees={employees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} myManagedGroupIds={null} />
+            <ComplianceView employees={employees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} myManagedGroupIds={null} onCorrectPracticalCase={onCorrectPracticalCase} onCorrectModulePracticalCase={onCorrectModulePracticalCase} />
           </div>
         </div>
       )}
@@ -8018,7 +8285,7 @@ function AdminPanel({
             <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", marginBottom: "var(--sp-3)" }}>
               Cumplimiento de tu equipo
             </div>
-            <ComplianceView employees={teamEmployees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} myManagedGroupIds={restrictToGroupIds} />
+            <ComplianceView employees={teamEmployees} courses={courses} groups={groups} completionsByCourse={completionsByCourse} onMarkFormReviewed={onMarkFormReviewed} puestos={puestos} checklistResponses={checklistResponses} onValidateChecklistItem={onValidateChecklistItem} myManagedGroupIds={restrictToGroupIds} onCorrectPracticalCase={onCorrectPracticalCase} onCorrectModulePracticalCase={onCorrectModulePracticalCase} />
           </div>
         </div>
       )}
