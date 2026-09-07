@@ -228,6 +228,7 @@ const HEADER_ALIASES = {
   nombre: ["nombre", "name", "empleado", "nombre y apellido", "nombre completo"],
   email: ["email", "correo", "e-mail", "correo electronico", "mail"],
   equipo: ["equipo", "grupo", "team", "departamento", "area"],
+  puesto: ["puesto", "cargo", "posicion", "position", "job", "role", "rol"],
 };
 
 function matchColumn(headers, field) {
@@ -238,8 +239,10 @@ function matchColumn(headers, field) {
 
 // Lee un Excel/CSV de empleados y devuelve filas normalizadas + errores de formato.
 // Columnas reconocidas (en cualquier orden, mayúsc./minúsc. y con o sin acentos):
-// Nombre (obligatoria), Email (opcional), Equipo (opcional). Las contraseñas no se
-// importan — cada persona crea la suya en su primer acceso.
+// Nombre (obligatoria), Email (opcional), Equipo (opcional), Puesto (opcional —
+// se empareja por nombre con un Puesto ya creado en Admin → Puestos; si no
+// coincide con ninguno, simplemente no se asigna nada, no da error). Las
+// contraseñas no se importan — cada persona crea la suya en su primer acceso.
 async function parseEmployeeExcelFile(file) {
   const buf = await file.arrayBuffer();
   const workbook = XLSX.read(buf, { type: "array" });
@@ -255,6 +258,7 @@ async function parseEmployeeExcelFile(file) {
   }
   const emailIdx = matchColumn(headers, "email");
   const equipoIdx = matchColumn(headers, "equipo");
+  const puestoIdx = matchColumn(headers, "puesto");
 
   const parsed = [];
   for (let i = 1; i < rows.length; i++) {
@@ -263,7 +267,8 @@ async function parseEmployeeExcelFile(file) {
     if (!name) continue;
     const email = emailIdx !== -1 ? String(row[emailIdx] || "").trim() : "";
     const equipo = equipoIdx !== -1 ? String(row[equipoIdx] || "").trim() : "";
-    parsed.push({ name, email, equipo });
+    const puesto = puestoIdx !== -1 ? String(row[puestoIdx] || "").trim() : "";
+    parsed.push({ name, email, equipo, puesto });
   }
   return { rows: parsed, error: null };
 }
@@ -2150,6 +2155,7 @@ export default function AulaVirtualMB() {
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
   const [pendingDeepLink, setPendingDeepLink] = useState(null);
+  const [deepLinkPuestoTarget, setDeepLinkPuestoTarget] = useState(null);
   const [deepLinkError, setDeepLinkError] = useState("");
   const [celebration, setCelebration] = useState(null);
 
@@ -2160,11 +2166,15 @@ export default function AulaVirtualMB() {
     const params = new URLSearchParams(window.location.search);
     const linkCourseId = params.get("course");
     const linkPathId = params.get("path");
+    const linkPuestoId = params.get("puesto");
     if (linkCourseId) {
       setPendingDeepLink({ type: "course", id: linkCourseId });
       window.history.replaceState({}, "", window.location.pathname);
     } else if (linkPathId) {
       setPendingDeepLink({ type: "path", id: linkPathId });
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (linkPuestoId) {
+      setPendingDeepLink({ type: "puesto", id: linkPuestoId });
       window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
@@ -2251,7 +2261,23 @@ export default function AulaVirtualMB() {
   // Aplicar el enlace directo en cuanto haya alguien identificado (recién
   // logueado, o con sesión ya recordada) y los datos estén cargados.
   useEffect(() => {
-    if (loading || !currentUser || !pendingDeepLink) return;
+    if (loading || !pendingDeepLink) return;
+    if (pendingDeepLink.type === "puesto") {
+      // Los puestos solo los gestiona un admin (o un responsable, dentro de
+      // "Mi equipo") — a diferencia de formaciones y rutas, no hace falta
+      // haber entrado como un empleado concreto para que esto se aplique.
+      if (!isAdmin) return;
+      const exists = puestos.some((p) => p.id === pendingDeepLink.id);
+      if (exists) {
+        setDeepLinkPuestoTarget(pendingDeepLink.id);
+        setView("admin");
+      } else {
+        setDeepLinkError("El enlace que has abierto no corresponde a ningún puesto existente. Puede que se haya eliminado.");
+      }
+      setPendingDeepLink(null);
+      return;
+    }
+    if (!currentUser) return;
     if (pendingDeepLink.type === "course") {
       const exists = courses.some((c) => c.id === pendingDeepLink.id);
       if (exists) {
@@ -2269,7 +2295,7 @@ export default function AulaVirtualMB() {
       }
     }
     setPendingDeepLink(null);
-  }, [loading, currentUser, pendingDeepLink, courses, paths]);
+  }, [loading, currentUser, isAdmin, pendingDeepLink, courses, paths, puestos]);
 
   const activeCourse = useMemo(() => courses.find((c) => c.id === activeCourseId) || null, [courses, activeCourseId]);
 
@@ -2680,6 +2706,16 @@ export default function AulaVirtualMB() {
     const updated = groups.filter((g) => g.id !== id);
     setGroups(updated);
     saveKey("mb_groups", updated);
+    // Si algún puesto pertenecía a este departamento, se queda sin
+    // departamento en vez de apuntar a uno que ya no existe — si no, su
+    // checklist se volvería invisible para cualquier responsable, sin que
+    // nadie se enterara.
+    const affectedPuestos = puestos.filter((p) => p.groupId === id);
+    if (affectedPuestos.length > 0) {
+      const updatedPuestos = puestos.map((p) => (p.groupId === id ? { ...p, groupId: null } : p));
+      setPuestos(updatedPuestos);
+      await saveKey("mb_puestos", updatedPuestos);
+    }
   }
   async function updateGroupMembers(id, memberNames) {
     const updated = groups.map((g) => (g.id === id ? { ...g, memberNames } : g));
@@ -2724,6 +2760,16 @@ export default function AulaVirtualMB() {
     const updatedEmployees = employees.map((e) => (e.puestoId === id ? { ...e, puestoId: null, puestoAssignedAt: null } : e));
     setEmployees(updatedEmployees);
     await saveKey("mb_employees", updatedEmployees);
+    // Las evaluaciones de checklist ya dadas para este puesto también se
+    // limpian — si no, se quedan guardadas para siempre apuntando a un
+    // puesto que ya no existe, sin que nadie las vuelva a ver nunca.
+    const affectedNames = Object.keys(checklistResponses).filter((name) => checklistResponses[name]?.puestoId === id);
+    if (affectedNames.length > 0) {
+      const updatedResponses = { ...checklistResponses };
+      for (const name of affectedNames) delete updatedResponses[name];
+      setChecklistResponses(updatedResponses);
+      await saveKey("mb_checklist_responses", updatedResponses);
+    }
   }
 
   // Asignar puesto a una persona (o a varias de golpe, para la asignación en
@@ -3008,13 +3054,22 @@ export default function AulaVirtualMB() {
 
     for (const row of rows) {
       const existingIdx = updatedEmployees.findIndex((e) => e.name.trim().toLowerCase() === row.name.trim().toLowerCase());
+      // El puesto se empareja por nombre con uno ya existente — no se crea
+      // ninguno nuevo desde aquí, eso se hace a propósito solo desde Admin →
+      // Puestos, para no acabar con puestos duplicados por una errata.
+      const matchedPuesto = row.puesto ? puestos.find((p) => p.name.trim().toLowerCase() === row.puesto.trim().toLowerCase()) : null;
       if (existingIdx === -1) {
-        updatedEmployees.push({ name: row.name, passwordHash: null, email: row.email || "" });
+        updatedEmployees.push({
+          name: row.name, passwordHash: null, email: row.email || "",
+          puestoId: matchedPuesto ? matchedPuesto.id : null,
+          puestoAssignedAt: matchedPuesto ? todayISO() : null,
+        });
         newlyCreatedNames.push(row.name);
       } else {
         updatedEmployees[existingIdx] = {
           ...updatedEmployees[existingIdx],
           email: row.email || updatedEmployees[existingIdx].email,
+          ...(matchedPuesto ? { puestoId: matchedPuesto.id, puestoAssignedAt: todayISO() } : {}),
         };
       }
 
@@ -3076,8 +3131,26 @@ export default function AulaVirtualMB() {
     }
     await deleteKey(`mb_completions_course_${id}`);
     const updated = courses.filter((c) => c.id !== id);
-    setCourses(updated);
-    await saveKey("mb_courses", updated);
+
+    // Quitamos también cualquier referencia a esta formación desde otros
+    // sitios — si no, quedan huecos silenciosos: una ruta a la que "le falta
+    // un paso" sin explicación, o un módulo cuyo requisito señala a algo que
+    // ya no existe.
+    const cleanedCourses = updated.map((c) => {
+      if (!c.modules || c.modules.length === 0) return c;
+      const hasRef = c.modules.some((m) => (m.relatedCourses || []).some((rc) => rc.courseId === id));
+      if (!hasRef) return c;
+      return { ...c, modules: c.modules.map((m) => ({ ...m, relatedCourses: (m.relatedCourses || []).filter((rc) => rc.courseId !== id) })) };
+    });
+    setCourses(cleanedCourses);
+    await saveKey("mb_courses", cleanedCourses);
+
+    const affectedPaths = paths.filter((p) => p.courseIds.includes(id));
+    if (affectedPaths.length > 0) {
+      const updatedPaths = paths.map((p) => (p.courseIds.includes(id) ? { ...p, courseIds: p.courseIds.filter((cid) => cid !== id) } : p));
+      setPaths(updatedPaths);
+      await saveKey("mb_paths", updatedPaths);
+    }
   }
   async function addNews(item) {
     const updated = [item, ...news];
@@ -3458,6 +3531,8 @@ export default function AulaVirtualMB() {
         )}
         {view === "admin" && isAdmin && (
           <AdminPanel
+            deepLinkPuestoTarget={deepLinkPuestoTarget}
+            onConsumeDeepLinkPuestoTarget={() => setDeepLinkPuestoTarget(null)}
             courses={courses}
             news={news}
             employees={employees}
@@ -4427,7 +4502,11 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
   const query = searchQuery.trim().toLowerCase();
   if (query) {
     const matches = visibleCourses.filter(
-      (c) => c.title.toLowerCase().includes(query) || (c.description || "").toLowerCase().includes(query) || categoryMeta(c.category).label.toLowerCase().includes(query)
+      (c) =>
+        c.title.toLowerCase().includes(query) ||
+        (c.description || "").toLowerCase().includes(query) ||
+        categoryMeta(c.category).label.toLowerCase().includes(query) ||
+        (c.modules || []).some((m) => m.title.toLowerCase().includes(query) || (m.body || "").toLowerCase().includes(query))
     );
     const pathMatches = paths.filter(
       (p) => p.title.toLowerCase().includes(query) || (p.description || "").toLowerCase().includes(query)
@@ -5357,7 +5436,8 @@ function PuestosAdminTab({ puestos, groups, onSavePuesto, onDeletePuesto }) {
                 {!groupName(p.groupId) && " · sin departamento asignado"}
               </div>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <CopyLinkButton url={buildShareLink("puesto", p.id)} compact />
               <button onClick={() => startEdit(p)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--info)", border: "none", background: "none", cursor: "pointer" }}>Editar</button>
               <button onClick={() => onDeletePuesto(p.id)} style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--danger)", border: "none", background: "none", cursor: "pointer" }}>Eliminar</button>
             </div>
@@ -5692,11 +5772,21 @@ function PathsAdminTab({ paths, courses, groups, employees, onSavePath, onDelete
 // CourseDetail de siempre (con toda su lógica de módulos/test incluida), pero
 // con un estado local aislado: nada de lo que se haga aquí (responder al
 // test, valorar, marcar como visto) toca la base de datos real.
-function CoursePreviewOverlay({ draft, onClose }) {
+function CoursePreviewOverlay({ draft, courses, onClose }) {
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizResult, setQuizResult] = useState(null);
   const [record, setRecord] = useState({ status: "pendiente", moduleProgress: {} });
+  // En la vista previa no hay forma real de "completar" otra formación para
+  // probar un requisito — así que, en vez de eso, se puede marcar como
+  // "simulada completada" con un clic, solo para probar que el desbloqueo
+  // funciona. No toca ningún dato real de nadie.
+  const [simulatedCompletedCourseIds, setSimulatedCompletedCourseIds] = useState(() => new Set());
   const PREVIEW_USER = "Vista previa";
+  const previewCompletionsByCourse = useMemo(() => {
+    const map = {};
+    for (const id of simulatedCompletedCourseIds) map[id] = { [PREVIEW_USER]: { status: "completada" } };
+    return map;
+  }, [simulatedCompletedCourseIds]);
 
   function resetQuiz() {
     setQuizAnswers({});
@@ -5719,6 +5809,29 @@ function CoursePreviewOverlay({ draft, onClose }) {
     setQuizResult({ score, passed, correctCount, total: quiz.length });
   }
 
+  // Igual que recomputeModuleState (la versión real), pero todo en memoria —
+  // así la vista previa simula de verdad las mismas 4 exigencias de un
+  // módulo (test, formación requisito, checklist, caso práctico), no solo el
+  // test como antes.
+  function recomputeModuleStatePreview(moduleId, progressPatch) {
+    const moduleObj = (draft.modules || []).find((m) => m.id === moduleId);
+    if (!moduleObj) return null;
+    let finalModuleRec = null;
+    setRecord((prev) => {
+      const prevModuleRec = prev.moduleProgress?.[moduleId] || {};
+      const mergedModuleRec = { ...prevModuleRec, ...progressPatch };
+      const quizPassed = "quizPassed" in mergedModuleRec ? mergedModuleRec.quizPassed : !!prevModuleRec.quizPassed;
+      const passed = isModulePassed(moduleObj, quizPassed, PREVIEW_USER, previewCompletionsByCourse, mergedModuleRec);
+      const moduleProgress = { ...(prev.moduleProgress || {}), [moduleId]: { ...mergedModuleRec, quizPassed, passed } };
+      const allPassed = (draft.modules || []).every((m) => moduleProgress[m.id]?.passed);
+      const next = { ...prev, status: "en_progreso", moduleProgress, quizPassed: allPassed };
+      next.awaitingRating = computeAwaitingRating(draft, next);
+      finalModuleRec = moduleProgress[moduleId];
+      return next;
+    });
+    return finalModuleRec;
+  }
+
   function submitModuleQuiz(moduleObj) {
     const quiz = moduleObj.quiz || [];
     let correctCount = 0;
@@ -5726,18 +5839,34 @@ function CoursePreviewOverlay({ draft, onClose }) {
       if (quizAnswers[i] === q.correct) correctCount++;
     });
     const score = quiz.length ? Math.round((correctCount / quiz.length) * 100) : 100;
-    const passed = score >= (moduleObj.passPct ?? 70);
-    let result;
-    setRecord((prev) => {
-      const moduleProgress = { ...(prev.moduleProgress || {}), [moduleObj.id]: { passed, score } };
-      const allPassed = (draft.modules || []).every((m) => moduleProgress[m.id]?.passed);
-      const next = { ...prev, moduleProgress, status: "en_progreso", quizPassed: allPassed };
-      next.awaitingRating = computeAwaitingRating(draft, next);
-      return next;
-    });
-    result = { score, passed, correctCount, total: quiz.length };
+    const quizPassed = score >= (moduleObj.passPct ?? 70);
+    recomputeModuleStatePreview(moduleObj.id, { quizPassed, score });
+    // isModulePassed se evalúa dentro de recomputeModuleStatePreview con el
+    // estado más reciente — para el aviso inmediato en pantalla, calculamos
+    // aquí una copia igual de fiable con lo que ya tenemos a mano.
+    const prevModuleRec = record.moduleProgress?.[moduleObj.id] || {};
+    const passed = isModulePassed(moduleObj, quizPassed, PREVIEW_USER, previewCompletionsByCourse, prevModuleRec);
+    const result = { score, passed, quizPassed, correctCount, total: quiz.length };
     setQuizResult(result);
     return result;
+  }
+
+  function toggleSimulatedRelatedCourse(courseId) {
+    setSimulatedCompletedCourseIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(courseId)) next.delete(courseId);
+      else next.add(courseId);
+      return next;
+    });
+  }
+
+  function toggleChecklistStepPreview(moduleId, stepId) {
+    const prevChecked = record.moduleProgress?.[moduleId]?.checklistChecked || {};
+    recomputeModuleStatePreview(moduleId, { checklistChecked: { ...prevChecked, [stepId]: !prevChecked[stepId] } });
+  }
+
+  function submitModulePracticalCasePreview(moduleId, text) {
+    recomputeModuleStatePreview(moduleId, { practicalCaseAnswer: { text, submittedAt: todayISO() } });
   }
 
   function selfReport() {
@@ -5788,15 +5917,27 @@ function CoursePreviewOverlay({ draft, onClose }) {
           onSelfReport={selfReport}
           onRateCourse={rate}
           onSubmitPracticalCase={submitPracticalCasePreview}
+          courses={courses}
+          completionsByCourse={previewCompletionsByCourse}
+          onOpenRelatedCourse={toggleSimulatedRelatedCourse}
+          onToggleModuleChecklistStep={toggleChecklistStepPreview}
+          onSubmitModulePracticalCase={submitModulePracticalCasePreview}
           onBack={onClose}
           onRetry={resetQuiz}
         />
+        {simulatedCompletedCourseIds.size > 0 && (
+          <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: "var(--sp-3)", fontStyle: "italic" }}>
+            Estás simulando que {simulatedCompletedCourseIds.size} formación{simulatedCompletedCourseIds.size === 1 ? "" : "es"} relacionada{simulatedCompletedCourseIds.size === 1 ? "" : "s"} ya está{simulatedCompletedCourseIds.size === 1 ? "" : "n"} completada{simulatedCompletedCourseIds.size === 1 ? "" : "s"} — solo para probar el desbloqueo aquí, no es un dato real.
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 function AdminPanel({
+  deepLinkPuestoTarget,
+  onConsumeDeepLinkPuestoTarget,
   courses,
   news,
   employees,
@@ -5847,6 +5988,16 @@ function AdminPanel({
   useEffect(() => {
     onLoadTracking();
   }, []);
+
+  // Si se entró aquí por un enlace directo a un Puesto concreto, saltar a
+  // esa pestaña directamente — sin esto, tocaría navegar a mano hasta
+  // Personas → Puestos cada vez.
+  useEffect(() => {
+    if (deepLinkPuestoTarget && mode !== "team") {
+      setTab("puestos");
+      onConsumeDeepLinkPuestoTarget && onConsumeDeepLinkPuestoTarget();
+    }
+  }, [deepLinkPuestoTarget]);
 
   const emptyQuestion = { question: "", options: ["", "", "", ""], correct: 0 };
   const emptyAssignment = { mode: "todos", groupIds: [], employeeNames: [] };
@@ -6163,6 +6314,12 @@ function AdminPanel({
         const label = `Módulo ${mi + 1}${mod.title ? ` ("${mod.title}")` : ""}`;
         if (!mod.title || !mod.title.trim()) warnings.push(`Módulo ${mi + 1}: no tiene título.`);
         if ((mod.quiz || []).length > 0) checkQuiz(mod.quiz, label);
+        if (mod.practicalCase && (!mod.practicalCase.title?.trim() || !mod.practicalCase.description?.trim())) {
+          warnings.push(`${label}: el caso práctico está activado pero le falta el título o la descripción.`);
+        }
+        (mod.externalLinks || []).forEach((link, li) => {
+          if (!link.label?.trim() || !link.url?.trim()) warnings.push(`${label}: el enlace ${li + 1} tiene el título o la URL sin rellenar.`);
+        });
       });
     }
     return warnings;
@@ -7107,7 +7264,7 @@ function AdminPanel({
         </div>
       )}
 
-      {showPreview && <CoursePreviewOverlay draft={draft} onClose={() => setShowPreview(false)} />}
+      {showPreview && <CoursePreviewOverlay draft={draft} courses={courses} onClose={() => setShowPreview(false)} />}
 
       {tab === "paths" && (
         <PathsAdminTab paths={paths} courses={courses} groups={groups} employees={employees} onSavePath={onSavePath} onDeletePath={onDeletePath} mode={mode} />
@@ -7294,9 +7451,11 @@ function AdminPanel({
             </div>
             <div className="text-xs text-gray-500 mb-3">
               Sube un archivo .xlsx o .csv con columnas <strong>Nombre</strong> (obligatoria), y opcionalmente{" "}
-              <strong>Email</strong> y <strong>Equipo</strong>. No hace falta contraseña — cada persona crea la suya en
-              su primer acceso, verificando el email que pongas aquí. Si la columna Equipo nombra un grupo que no
-              existe todavía, se crea solo.
+              <strong>Email</strong>, <strong>Equipo</strong> y <strong>Puesto</strong>. No hace falta contraseña — cada
+              persona crea la suya en su primer acceso, verificando el email que pongas aquí. Si la columna Equipo
+              nombra un grupo que no existe todavía, se crea solo. La columna Puesto, en cambio, solo empareja con un
+              puesto que ya exista en Admin → Puestos (por su nombre exacto) — si no coincide con ninguno, se ignora
+              sin dar error.
             </div>
             <input
               type="file"
@@ -7335,17 +7494,22 @@ function AdminPanel({
                         <th className="px-2 py-1.5">Nombre</th>
                         <th className="px-2 py-1.5">Email</th>
                         <th className="px-2 py-1.5">Equipo</th>
+                        <th className="px-2 py-1.5">Puesto</th>
                         <th className="px-2 py-1.5">Estado</th>
                       </tr>
                     </thead>
                     <tbody>
                       {importPreviewRows.map((r, i) => {
                         const exists = employees.some((e) => e.name.trim().toLowerCase() === r.name.trim().toLowerCase());
+                        const matchedPuesto = r.puesto ? puestos.find((p) => p.name.trim().toLowerCase() === r.puesto.trim().toLowerCase()) : null;
                         return (
                           <tr key={i} className="border-b last:border-0" style={{ borderColor: "#00000008" }}>
                             <td className="px-2 py-1.5 font-medium">{r.name}</td>
                             <td className="px-2 py-1.5 text-gray-500">{r.email || "—"}</td>
                             <td className="px-2 py-1.5 text-gray-500">{r.equipo || "—"}</td>
+                            <td className="px-2 py-1.5 text-gray-500">
+                              {!r.puesto ? "—" : matchedPuesto ? matchedPuesto.name : <span className="text-amber-700">"{r.puesto}" no coincide con ninguno</span>}
+                            </td>
                             <td className="px-2 py-1.5">
                               {exists ? (
                                 <span className="text-amber-700 font-semibold">Ya existe — se actualiza</span>
