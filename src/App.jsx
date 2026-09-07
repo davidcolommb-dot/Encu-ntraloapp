@@ -495,6 +495,17 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
   const [correctionText, setCorrectionText] = useState("");
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [courseSearch, setCourseSearch] = useState("");
+  // Filtros rápidos que se activan pinchando en una tarjeta de resumen o en
+  // un departamento — para que el panel lleve de verdad a algún sitio, en
+  // vez de ser solo un número bonito que no hace nada.
+  const [departmentFilter, setDepartmentFilter] = useState(null); // groupId o null
+  const [attentionFilter, setAttentionFilter] = useState(null); // "overdue" | "formReview" | "caseReview" | null
+
+  function goToPerson(filters) {
+    setViewMode("person");
+    if ("departmentFilter" in filters) setDepartmentFilter(filters.departmentFilter);
+    if ("attentionFilter" in filters) setAttentionFilter(filters.attentionFilter);
+  }
 
   const compliance = useMemo(
     () => computeEmployeeCompliance(employees, courses, groups, completionsByCourse),
@@ -510,13 +521,21 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
     return { totalOverdue, avgPercent, upToDate, totalFormReview, totalCaseReview };
   }, [compliance]);
 
+  const departmentFilterGroup = departmentFilter ? groups.find((g) => g.id === departmentFilter) : null;
+
   const filteredSorted = useMemo(() => {
     let list = compliance.filter((c) => c.employee.name.toLowerCase().includes(personSearch.trim().toLowerCase()));
+    if (departmentFilterGroup) {
+      list = list.filter((c) => (departmentFilterGroup.memberNames || []).includes(c.employee.name));
+    }
+    if (attentionFilter === "overdue") list = list.filter((c) => c.overdueCount > 0);
+    else if (attentionFilter === "formReview") list = list.filter((c) => c.needsFormReview > 0);
+    else if (attentionFilter === "caseReview") list = list.filter((c) => c.needsCaseReview > 0);
     if (personSort === "name") list = [...list].sort((a, b) => a.employee.name.localeCompare(b.employee.name));
     else if (personSort === "compliance") list = [...list].sort((a, b) => a.percent - b.percent);
     else list = [...list].sort((a, b) => b.overdueCount - a.overdueCount || a.percent - b.percent);
     return list;
-  }, [compliance, personSearch, personSort]);
+  }, [compliance, personSearch, personSort, departmentFilterGroup, attentionFilter]);
 
   const selectedCourse = courses.find((c) => c.id === selectedCourseId);
   const courseRows = useMemo(() => {
@@ -543,29 +562,64 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
-      {/* Resumen visual de un vistazo */}
+      {/* Resumen visual de un vistazo — cada tarjeta lleva a algún sitio, no
+          son solo números decorativos */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: "var(--sp-3)" }}>
         <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
           <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--brand)" }}>{overallStats.avgPercent}%</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Cumplimiento medio</div>
         </div>
-        <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
+        <button
+          onClick={() => goToPerson({ departmentFilter: null, attentionFilter: null })}
+          style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center", cursor: "pointer", border: "none" }}
+        >
           <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: "var(--success)" }}>{overallStats.upToDate}</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Personas al día del todo</div>
-        </div>
-        <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
+        </button>
+        <button
+          onClick={() => goToPerson({ departmentFilter: null, attentionFilter: "overdue" })}
+          disabled={overallStats.totalOverdue === 0}
+          style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center", cursor: overallStats.totalOverdue === 0 ? "default" : "pointer", border: "none" }}
+        >
           <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: overallStats.totalOverdue > 0 ? "var(--danger)" : "var(--text-muted)" }}>{overallStats.totalOverdue}</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Formaciones vencidas (total)</div>
-        </div>
-        <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
+        </button>
+        <button
+          onClick={() => goToPerson({ departmentFilter: null, attentionFilter: "formReview" })}
+          disabled={overallStats.totalFormReview === 0}
+          style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center", cursor: overallStats.totalFormReview === 0 ? "default" : "pointer", border: "none" }}
+        >
           <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: overallStats.totalFormReview > 0 ? "var(--info)" : "var(--text-muted)" }}>{overallStats.totalFormReview}</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Forms externos por revisar</div>
-        </div>
-        <div style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center" }}>
+        </button>
+        <button
+          onClick={() => goToPerson({ departmentFilter: null, attentionFilter: "caseReview" })}
+          disabled={overallStats.totalCaseReview === 0}
+          style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "center", cursor: overallStats.totalCaseReview === 0 ? "default" : "pointer", border: "none" }}
+        >
           <div style={{ fontSize: "var(--text-2xl)", fontWeight: 700, color: overallStats.totalCaseReview > 0 ? "var(--info)" : "var(--text-muted)" }}>{overallStats.totalCaseReview}</div>
           <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Casos prácticos por corregir</div>
-        </div>
+        </button>
       </div>
+
+      {/* Aviso de filtro activo, con forma de quitarlo */}
+      {(departmentFilterGroup || attentionFilter) && viewMode === "person" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Filtrando:</span>
+          {departmentFilterGroup && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--brand-soft)", color: "var(--brand)" }}>
+              {departmentFilterGroup.name}
+              <button onClick={() => setDepartmentFilter(null)} style={{ border: "none", background: "none", cursor: "pointer", color: "inherit", display: "flex", padding: 0 }}><X size={11} /></button>
+            </span>
+          )}
+          {attentionFilter && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: "var(--radius-full)", backgroundColor: "var(--warning-soft)", color: "var(--warning)" }}>
+              {attentionFilter === "overdue" ? "Con algo vencido" : attentionFilter === "formReview" ? "Form por revisar" : "Caso por corregir"}
+              <button onClick={() => setAttentionFilter(null)} style={{ border: "none", background: "none", cursor: "pointer", color: "inherit", display: "flex", padding: 0 }}><X size={11} /></button>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Alternar entre ver por persona, por formación, por checklist de puesto, o comparar departamentos */}
       <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
@@ -612,6 +666,18 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
               <option value="compliance">Menor cumplimiento primero</option>
               <option value="name">Nombre (A-Z)</option>
             </select>
+            {myManagedGroupIds === null && groups.length > 1 && (
+              <select
+                value={departmentFilter || ""}
+                onChange={(e) => setDepartmentFilter(e.target.value || null)}
+                style={{ padding: "7px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)", color: "var(--text-primary)" }}
+              >
+                <option value="">Todos los departamentos</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            )}
           </div>
 
           {filteredSorted.length === 0 ? (
@@ -954,15 +1020,24 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
 
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
-                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Ordenados de peor a mejor cumplimiento medio.</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>Ordenados de peor a mejor cumplimiento medio. Pincha uno para ver a sus personas.</div>
                 {withData.map((d) => (
-                  <div key={d.group.id} style={{ ...DS.card, padding: "var(--sp-3)" }}>
+                  <button
+                    key={d.group.id}
+                    onClick={() => goToPerson({ departmentFilter: d.group.id, attentionFilter: null })}
+                    style={{ ...DS.card, padding: "var(--sp-3)", textAlign: "left", cursor: "pointer", border: "none", width: "100%", transition: "box-shadow var(--dur-fast) var(--ease-out)" }}
+                    onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "var(--shadow-md)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "none"; }}
+                  >
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)" }}>{d.group.name}</span>
                         <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{d.memberCount} persona{d.memberCount === 1 ? "" : "s"}</span>
                       </div>
-                      {d.totalOverdue > 0 && <StatusPill icon={AlertTriangle} label={`${d.totalOverdue} vencida${d.totalOverdue === 1 ? "" : "s"} en total`} variant="danger" />}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {d.totalOverdue > 0 && <StatusPill icon={AlertTriangle} label={`${d.totalOverdue} vencida${d.totalOverdue === 1 ? "" : "s"} en total`} variant="danger" />}
+                        <ChevronRight size={15} style={{ color: "var(--text-muted)" }} />
+                      </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: d.checklistPercent !== null ? 8 : 0 }}>
                       <span style={{ fontSize: 11, color: "var(--text-muted)", width: 110, flexShrink: 0 }}>Formaciones</span>
@@ -980,7 +1055,7 @@ function ComplianceView({ employees, courses, groups, completionsByCourse, onMar
                         <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 36, textAlign: "right" }}>{d.checklistPercent}%</span>
                       </div>
                     )}
-                  </div>
+                  </button>
                 ))}
                 {withoutData.length > 0 && (
                   <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
@@ -4668,19 +4743,28 @@ function sortByUrgency(list) {
   });
 }
 
-function CategoryBubble({ cat, onClick }) {
+function CategoryBubble({ cat, onClick, pendingCount }) {
   const Icon = cat.icon;
   return (
     <button
       onClick={onClick}
       style={{
-        ...DS.card, cursor: "pointer", padding: "var(--sp-6)",
+        ...DS.card, cursor: "pointer", padding: "var(--sp-6)", position: "relative",
         display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "var(--sp-3)",
         transition: "all var(--dur-base) var(--ease-out)", textAlign: "left",
       }}
       onMouseEnter={(e) => Object.assign(e.currentTarget.style, { boxShadow: "var(--shadow-md)", borderColor: cat.color, transform: "translateY(-2px)" })}
       onMouseLeave={(e) => Object.assign(e.currentTarget.style, { boxShadow: "none", borderColor: "var(--border)", transform: "none" })}
     >
+      {!!pendingCount && (
+        <span style={{
+          position: "absolute", top: 12, right: 12, minWidth: 22, height: 22, padding: "0 6px",
+          borderRadius: "var(--radius-full)", backgroundColor: "var(--danger)", color: "white",
+          fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center",
+        }}>
+          {pendingCount}
+        </span>
+      )}
       <div style={{ width: 44, height: 44, borderRadius: "var(--radius-md)", backgroundColor: `${cat.color}14`, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Icon size={22} style={{ color: cat.color }} />
       </div>
@@ -4688,13 +4772,13 @@ function CategoryBubble({ cat, onClick }) {
         <div style={{ fontSize: "var(--text-md)", fontWeight: 600, color: "var(--text-primary)", lineHeight: 1.3 }}>{cat.label}</div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-xs)", fontWeight: 500, color: cat.color, marginTop: "auto" }}>
-        Ver formaciones <ChevronRight size={13} />
+        {pendingCount ? `${pendingCount} pendiente${pendingCount === 1 ? "" : "s"}` : "Ver formaciones"} <ChevronRight size={13} />
       </div>
     </button>
   );
 }
 
-function CategoryPicker({ onSelectCategory }) {
+function CategoryPicker({ onSelectCategory, pendingCountByCategory }) {
   return (
     <div>
       <div style={{ marginBottom: "var(--sp-5)" }}>
@@ -4703,7 +4787,7 @@ function CategoryPicker({ onSelectCategory }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "var(--sp-4)" }}>
         {CATEGORIES.map((cat) => (
-          <CategoryBubble key={cat.id} cat={cat} onClick={() => onSelectCategory(cat.id)} />
+          <CategoryBubble key={cat.id} cat={cat} onClick={() => onSelectCategory(cat.id)} pendingCount={pendingCountByCategory ? pendingCountByCategory[cat.id] : null} />
         ))}
       </div>
     </div>
@@ -4714,6 +4798,30 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
   const [showCompleted, setShowCompleted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses.filter((c) => !c.archived);
+
+  // Pendientes por campo, y el total — cuentan aunque la formación no tenga
+  // fecha límite puesta; lo único que importa es que esté asignada y no
+  // completada todavía. Se ve desde fuera, antes de entrar a ningún campo.
+  const pendingCountByCategory = useMemo(() => {
+    const map = {};
+    for (const cat of CATEGORIES) {
+      map[cat.id] = visibleCourses.filter((c) => c.category === cat.id && (!currentUser || getStatus(currentUser, c.id) !== "completada")).length;
+    }
+    return map;
+  }, [visibleCourses, currentUser, getStatus]);
+  const totalPendingInCatalog = useMemo(() => Object.values(pendingCountByCategory).reduce((s, n) => s + n, 0), [pendingCountByCategory]);
+
+  const totalPendingBanner = currentUser && totalPendingInCatalog > 0 && (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 10, padding: "var(--sp-3) var(--sp-4)",
+      borderRadius: "var(--radius-md)", backgroundColor: "var(--warning-soft)", marginBottom: "var(--sp-4)",
+    }}>
+      <Clock size={16} style={{ color: "var(--warning)", flexShrink: 0 }} />
+      <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--warning-text)" }}>
+        {totalPendingInCatalog} formación{totalPendingInCatalog === 1 ? "" : "es"} pendiente{totalPendingInCatalog === 1 ? "" : "s"} en total, entre todos los campos.
+      </span>
+    </div>
+  );
 
   // Mapa courseId -> título de la primera ruta a la que pertenece (si alguna),
   // para la etiqueta "Parte de la ruta: ..." en las tarjetas.
@@ -4837,7 +4945,8 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
     return (
       <div>
         {searchBar}
-        <CategoryPicker onSelectCategory={onSelectCategory} />
+        {totalPendingBanner}
+        <CategoryPicker onSelectCategory={onSelectCategory} pendingCountByCategory={currentUser ? pendingCountByCategory : null} />
       </div>
     );
   }
@@ -4851,6 +4960,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
       {searchBar}
+      {totalPendingBanner}
       <button onClick={() => onSelectCategory(null)} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content" }}>
         <ChevronLeft size={15} /> Catálogo
       </button>
