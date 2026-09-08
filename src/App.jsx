@@ -3,7 +3,7 @@ import {
   ClipboardList, Users, Package, Cpu, CheckCircle2, Clock, AlertTriangle,
   Plus, Trash2, X, PlayCircle, FileText, Newspaper, ChevronLeft, ChevronDown, ChevronUp, ChevronRight,
   ShieldCheck, LayoutGrid, Home, Settings, Loader2, LogOut, Lock, KeyRound,
-  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check, Eye, BookOpen, Sparkles, Wrench, Archive, Copy, Save, GripVertical
+  Trophy, Award, Star, PartyPopper, Upload, FileSpreadsheet, Search, Map, Link2, Check, Eye, BookOpen, Sparkles, Wrench, Archive, Copy, Save, GripVertical, Building2
 } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { PublicClientApplication } from "@azure/msal-browser";
@@ -1710,6 +1710,37 @@ async function deleteKey(key) {
     if (error) reportStorageError("borrar", key, error);
   } catch (err) {
     reportStorageError("borrar", key, err);
+  }
+}
+
+// Vídeo propio: a diferencia de los documentos (que se guardan como texto en
+// la tabla normal, bien para archivos pequeños), un vídeo necesita el
+// almacenamiento de archivos de Supabase — un cubo ("bucket") aparte,
+// pensado para esto. VIDEO_MAX_SIZE_MB coincide con el máximo del plan
+// gratuito de Supabase (50 MB por archivo); si en algún momento se pasa al
+// plan de pago, este número es lo único que habría que subir.
+const VIDEO_BUCKET = "videos";
+const VIDEO_MAX_SIZE_MB = 50;
+async function uploadVideoFile(file) {
+  if (file.size > VIDEO_MAX_SIZE_MB * 1024 * 1024) {
+    return { error: `El vídeo pesa demasiado (máximo ${VIDEO_MAX_SIZE_MB} MB en el plan actual). Compruébalo comprimiéndolo o recortándolo.` };
+  }
+  const path = `${uid()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+  const { error } = await supabase.storage.from(VIDEO_BUCKET).upload(path, file, { contentType: file.type });
+  if (error) {
+    return { error: `No se pudo subir el vídeo: ${error.message}` };
+  }
+  const { data } = supabase.storage.from(VIDEO_BUCKET).getPublicUrl(path);
+  return { path, url: data.publicUrl, sizeKB: Math.round(file.size / 1024), mimeType: file.type };
+}
+async function deleteVideoFile(path) {
+  if (!path) return;
+  try {
+    await supabase.storage.from(VIDEO_BUCKET).remove([path]);
+  } catch (err) {
+    // Si falla el borrado del archivo en Storage, no bloqueamos el resto de
+    // la operación — como mucho queda un archivo huérfano ocupando espacio,
+    // que se puede limpiar luego a mano desde el panel de Supabase.
   }
 }
 
@@ -3508,6 +3539,39 @@ export default function AulaVirtualMB() {
     await saveKey("mb_courses", updated);
   }
 
+  // Borra un documento concreto desde la lista consolidada de Documentos —
+  // sin tener que entrar a editar la formación entera para quitarlo.
+  async function deleteAttachmentFrom(courseId, moduleId, attachmentId) {
+    const course = courses.find((c) => c.id === courseId);
+    if (!course) return;
+    let storageKey = null;
+    let updated;
+    if (moduleId) {
+      updated = courses.map((c) => {
+        if (c.id !== courseId) return c;
+        return {
+          ...c,
+          modules: c.modules.map((m) => {
+            if (m.id !== moduleId) return m;
+            const att = (m.attachments || []).find((a) => a.id === attachmentId);
+            if (att) storageKey = att.storageKey;
+            return { ...m, attachments: (m.attachments || []).filter((a) => a.id !== attachmentId) };
+          }),
+        };
+      });
+    } else {
+      updated = courses.map((c) => {
+        if (c.id !== courseId) return c;
+        const att = (c.attachments || []).find((a) => a.id === attachmentId);
+        if (att) storageKey = att.storageKey;
+        return { ...c, attachments: (c.attachments || []).filter((a) => a.id !== attachmentId) };
+      });
+    }
+    if (storageKey) await deleteKey(storageKey);
+    setCourses(updated);
+    await saveKey("mb_courses", updated);
+  }
+
   async function deleteCourse(id) {
     const course = courses.find((c) => c.id === id);
     if (course?.attachments) {
@@ -3515,11 +3579,13 @@ export default function AulaVirtualMB() {
         if (att.storageKey) await deleteKey(att.storageKey);
       }
     }
+    if (course?.videoFile?.path) await deleteVideoFile(course.videoFile.path);
     if (course?.modules) {
       for (const mod of course.modules) {
         for (const att of mod.attachments || []) {
           if (att.storageKey) await deleteKey(att.storageKey);
         }
+        if (mod.videoFile?.path) await deleteVideoFile(mod.videoFile.path);
       }
     }
     await deleteKey(`mb_completions_course_${id}`);
@@ -3939,6 +4005,7 @@ export default function AulaVirtualMB() {
             onSaveCourse={saveCourse}
             onDeleteCourse={deleteCourse}
             onSetCourseArchived={setCourseArchived}
+            onDeleteAttachment={deleteAttachmentFrom}
             onAddNews={addNews}
             onUpdateNews={updateNews}
             onDeleteNews={deleteNews}
@@ -3986,6 +4053,7 @@ export default function AulaVirtualMB() {
             onSaveCourse={saveCourse}
             onDeleteCourse={deleteCourse}
             onSetCourseArchived={setCourseArchived}
+            onDeleteAttachment={deleteAttachmentFrom}
             onAddNews={addNews}
             onUpdateNews={updateNews}
             onDeleteNews={deleteNews}
@@ -4126,7 +4194,7 @@ function CourseCard({ course, status, onOpen, pathTitle }) {
 
         {/* Meta row */}
         <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 11, color: "var(--text-muted)", marginTop: "auto", paddingTop: "var(--sp-2)", borderTop: "1px solid var(--border)" }}>
-          {course.videoUrl && <span style={{ display: "flex", alignItems: "center", gap: 3 }}><PlayCircle size={11} /> Vídeo</span>}
+          {(course.videoUrl || course.videoFile) && <span style={{ display: "flex", alignItems: "center", gap: 3 }}><PlayCircle size={11} /> Vídeo</span>}
           {(course.attachments || []).length > 0 && <span style={{ display: "flex", alignItems: "center", gap: 3 }}><FileText size={11} /> {course.attachments.length} doc{course.attachments.length > 1 ? "s" : ""}</span>}
           <span>{course.testMode === "googleform" ? "Google Form" : `${(course.quiz || []).length} pregunta${(course.quiz || []).length === 1 ? "" : "s"}`}</span>
         </div>
@@ -4854,6 +4922,10 @@ function CategoryPicker({ onSelectCategory, pendingCountByCategory }) {
 function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory, paths = [], onOpenPath }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState(null);
+  useEffect(() => {
+    setDepartmentFilter(null);
+  }, [selectedCategory]);
   const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses.filter((c) => !c.archived);
 
   // Pendientes por campo, y el total — cuentan aunque la formación no tenga
@@ -5010,8 +5082,20 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
 
   const cat = categoryMeta(selectedCategory);
   const categoryCourses = visibleCourses.filter((c) => c.category === selectedCategory);
-  const pendingCourses = sortByUrgency(categoryCourses.filter((c) => !currentUser || getStatus(currentUser, c.id) !== "completada"));
-  const completedCourses = currentUser ? categoryCourses.filter((c) => getStatus(currentUser, c.id) === "completada") : [];
+
+  // Filtro visual por departamento — solo se muestra si, dentro de este
+  // campo, hay al menos una formación con departamento puesto. Si nadie usa
+  // esto en un campo concreto, no aparece nada raro ahí.
+  const departmentsInCategory = groups.filter((g) => categoryCourses.some((c) => c.departmentGroupId === g.id));
+  // Una formación "General / Interdepartamental" (sin departamento puesto)
+  // se ve siempre, filtres por el departamento que filtres — el filtro solo
+  // hace desaparecer las que son específicas de OTRO departamento distinto.
+  const categoryCoursesFiltered = departmentFilter
+    ? categoryCourses.filter((c) => c.departmentGroupId === departmentFilter || !c.departmentGroupId)
+    : categoryCourses;
+
+  const pendingCourses = sortByUrgency(categoryCoursesFiltered.filter((c) => !currentUser || getStatus(currentUser, c.id) !== "completada"));
+  const completedCourses = currentUser ? categoryCoursesFiltered.filter((c) => getStatus(currentUser, c.id) === "completada") : [];
   const CatIcon = cat.icon;
 
   return (
@@ -5032,9 +5116,39 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
         </div>
       </div>
 
+      {departmentsInCategory.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          <button
+            onClick={() => setDepartmentFilter(null)}
+            style={{
+              display: "flex", alignItems: "center", gap: 5, fontSize: "var(--text-xs)", fontWeight: 600,
+              padding: "6px 12px", borderRadius: "var(--radius-full)", cursor: "pointer", border: "none",
+              backgroundColor: !departmentFilter ? cat.color : "var(--bg-inset)",
+              color: !departmentFilter ? "white" : "var(--text-secondary)",
+            }}
+          >
+            <Building2 size={12} /> Todos los departamentos
+          </button>
+          {departmentsInCategory.map((g) => (
+            <button
+              key={g.id}
+              onClick={() => setDepartmentFilter(g.id)}
+              style={{
+                display: "flex", alignItems: "center", gap: 5, fontSize: "var(--text-xs)", fontWeight: 600,
+                padding: "6px 12px", borderRadius: "var(--radius-full)", cursor: "pointer", border: "none",
+                backgroundColor: departmentFilter === g.id ? cat.color : "var(--bg-inset)",
+                color: departmentFilter === g.id ? "white" : "var(--text-secondary)",
+              }}
+            >
+              <Building2 size={12} /> {g.name}
+            </button>
+          ))}
+        </div>
+      )}
+
       {pendingCourses.length === 0 ? (
         <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", padding: "var(--sp-4) 0" }}>
-          {completedCourses.length > 0 ? "No tienes formaciones pendientes en este campo. Al día." : "Todavía no hay formaciones en este campo."}
+          {departmentFilter ? "No hay formaciones pendientes de este departamento en este campo." : completedCourses.length > 0 ? "No tienes formaciones pendientes en este campo. Al día." : "Todavía no hay formaciones en este campo."}
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "var(--sp-4)" }}>
@@ -5117,7 +5231,16 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
         <DeadlineChip deadline={course.deadline} completed={status === "completada"} />
       </div>
 
-      {course.videoUrl && (
+      {course.videoFile ? (
+        <div>
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <PlayCircle size={14} /> VÍDEO DE LA FORMACIÓN
+          </div>
+          <div style={{ borderRadius: "var(--radius-lg)", overflow: "hidden", backgroundColor: "#000", aspectRatio: "16/9" }}>
+            <video controls src={course.videoFile.url} style={{ width: "100%", height: "100%" }} title={course.title} />
+          </div>
+        </div>
+      ) : course.videoUrl && (
         <div>
           <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
             <PlayCircle size={14} /> VÍDEO DE LA FORMACIÓN
@@ -5378,7 +5501,11 @@ function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers
         </div>
       )}
 
-      {mod.videoUrl && (
+      {mod.videoFile ? (
+        <div style={{ borderRadius: "var(--radius-lg)", overflow: "hidden", backgroundColor: "#000", aspectRatio: "16/9" }}>
+          <video controls src={mod.videoFile.url} style={{ width: "100%", height: "100%" }} title={mod.title} />
+        </div>
+      ) : mod.videoUrl && (
         <div>
           <div style={{ borderRadius: "var(--radius-lg)", overflow: "hidden", backgroundColor: "#000", aspectRatio: "16/9" }}>
             <iframe src={embed} style={{ width: "100%", height: "100%", border: "none" }} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen title={mod.title} />
@@ -5689,6 +5816,27 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
 }
 
 
+// Editor de vídeo: alternar entre pegar un enlace externo (YouTube/Vimeo/
+// Drive) o subir un archivo de vídeo propio, que se reproduce dentro de la
+// app sin salir a ningún sitio. Se usa tanto para el vídeo principal de una
+// formación como para el de cada módulo.
+// El vídeo propio (subir un archivo) se probó y se descartó — con 1 GB de
+// almacenamiento en el plan gratuito de Supabase, unos pocos vídeos lo
+// habrían llenado del todo. Se deja solo el enlace externo (YouTube, Vimeo,
+// Google Drive...), que no ocupa nada de tu espacio.
+function VideoFieldEditor({ videoUrl, videoFile, onSetVideoUrl, label = "Vídeo" }) {
+  return (
+    <div>
+      <TextInput label={label} value={videoUrl} onChange={onSetVideoUrl} placeholder="https://www.youtube.com/watch?v=..." />
+      {videoFile && (
+        <div className="text-[11px] mt-1" style={{ color: "var(--warning)" }}>
+          Esta formación tiene un vídeo propio subido de antes ({videoFile.name || "sin nombre"}). Sigue funcionando, pero ya no se pueden subir vídeos nuevos — si quieres quitarlo, pégale un enlace externo aquí arriba y lo sustituye.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TextInput({ label, value, onChange, placeholder, type = "text" }) {
   return (
     <label className="block text-xs font-semibold text-gray-500 mb-1">
@@ -5742,6 +5890,80 @@ function ModuleChecklistStepInput({ onAdd }) {
       >
         Añadir
       </button>
+    </div>
+  );
+}
+
+// Lista consolidada de todos los documentos (PDF/Word) subidos en cualquier
+// formación o módulo, en un solo sitio — antes había que entrar formación
+// por formación para verlos.
+function DocumentosAdminTab({ courses, onDeleteAttachment }) {
+  const [search, setSearch] = useState("");
+  const allDocs = useMemo(() => {
+    const docs = [];
+    for (const c of courses) {
+      for (const att of c.attachments || []) {
+        docs.push({ att, courseId: c.id, courseTitle: c.title, moduleId: null, moduleTitle: null });
+      }
+      for (const m of c.modules || []) {
+        for (const att of m.attachments || []) {
+          docs.push({ att, courseId: c.id, courseTitle: c.title, moduleId: m.id, moduleTitle: m.title });
+        }
+      }
+    }
+    return docs.sort((a, b) => (b.att.sizeKB || 0) - (a.att.sizeKB || 0));
+  }, [courses]);
+
+  const filtered = allDocs.filter(
+    (d) => d.att.name.toLowerCase().includes(search.trim().toLowerCase()) || d.courseTitle.toLowerCase().includes(search.trim().toLowerCase())
+  );
+  const totalKB = allDocs.reduce((s, d) => s + (d.att.sizeKB || 0), 0);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)" }}>
+      <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+        {allDocs.length} documento{allDocs.length === 1 ? "" : "s"} en total · {(totalKB / 1024).toFixed(1)} MB
+      </div>
+      {allDocs.length > 5 && (
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Buscar por nombre de archivo o de formación..."
+          className="w-full text-sm rounded-md border px-3 py-2"
+          style={{ borderColor: "#00000020" }}
+        />
+      )}
+      {allDocs.length === 0 ? (
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay ningún documento subido todavía.</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Ningún documento coincide con la búsqueda.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-2)" }}>
+          {filtered.map((d) => (
+            <div key={d.att.id} style={{ ...DS.card, padding: "var(--sp-3)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.att.name}</div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                  {d.courseTitle}{d.moduleTitle ? ` · ${d.moduleTitle}` : ""} · {((d.att.sizeKB || 0) / 1024).toFixed(1)} MB
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                <AttachmentViewer att={d.att} />
+                <button
+                  onClick={() => {
+                    if (window.confirm(`¿Eliminar "${d.att.name}"? Se quitará de "${d.courseTitle}${d.moduleTitle ? ` — ${d.moduleTitle}` : ""}".`)) {
+                      onDeleteAttachment(d.courseId, d.moduleId, d.att.id);
+                    }
+                  }}
+                  style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--danger)", border: "none", background: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}
+                >
+                  <Trash2 size={13} /> Eliminar
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -6383,6 +6605,7 @@ function AdminPanel({
   onSaveCourse,
   onDeleteCourse,
   onSetCourseArchived,
+  onDeleteAttachment,
   onAddNews,
   onUpdateNews,
   onDeleteNews,
@@ -6439,8 +6662,10 @@ function AdminPanel({
     id: null,
     title: "",
     category: "protocolos",
+    departmentGroupId: null,
     description: "",
     videoUrl: "",
+    videoFile: null,
     presentationUrl: "",
     deadline: "",
     passPct: 70,
@@ -6527,8 +6752,10 @@ function AdminPanel({
       id: null,
       title: "",
       category: "protocolos",
+      departmentGroupId: null,
       description: "",
       videoUrl: "",
+      videoFile: null,
       presentationUrl: "",
       deadline: "",
       passPct: 70,
@@ -6584,9 +6811,13 @@ function AdminPanel({
       title: `${course.title} (copia)`,
       publishedAt: null,
       attachments: [],
-      modules: (course.modules || []).map((m) => ({ ...m, attachments: [] })),
+      videoFile: null,
+      modules: (course.modules || []).map((m) => ({ ...m, attachments: [], videoFile: null })),
     });
-    setDuplicateAttachmentsNotice((course.attachments?.length || 0) + (course.modules || []).reduce((s, m) => s + (m.attachments?.length || 0), 0));
+    const attachmentCount = (course.attachments?.length || 0) + (course.modules || []).reduce((s, m) => s + (m.attachments?.length || 0), 0);
+    const videoCount = (course.videoFile ? 1 : 0) + (course.modules || []).reduce((s, m) => s + (m.videoFile ? 1 : 0), 0);
+    setDuplicateAttachmentsNotice(attachmentCount);
+    setDuplicateVideosNotice(videoCount);
   }
   function setAssignmentMode(mode) {
     setDraft((d) => ({ ...d, assignment: { ...d.assignment, mode } }));
@@ -6702,7 +6933,7 @@ function AdminPanel({
 
   // ---- Gestión de módulos (formaciones secuenciales) ----
   const NEW_MODULE_TEMPLATE = () => ({
-    id: uid(), title: "", body: "", videoUrl: "", passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [],
+    id: uid(), title: "", body: "", videoUrl: "", videoFile: null, passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [],
     relatedCourses: [], externalLinks: [], practicalCase: null, checklistSteps: [],
   });
   // Plantillas de partida: cambian solo la estructura (no rellenan texto de
@@ -6907,6 +7138,7 @@ function AdminPanel({
   }
   const [pendingWarnings, setPendingWarnings] = useState(null);
   const [duplicateAttachmentsNotice, setDuplicateAttachmentsNotice] = useState(0);
+  const [duplicateVideosNotice, setDuplicateVideosNotice] = useState(0);
   const [showPreview, setShowPreview] = useState(false);
   const [courseListSearch, setCourseListSearch] = useState("");
   const [courseListCategoryFilter, setCourseListCategoryFilter] = useState("");
@@ -7041,7 +7273,7 @@ function AdminPanel({
   const [teamNewMemberName, setTeamNewMemberName] = useState("");
 
   const TAB_GROUPS = [
-    { id: "content", label: "Contenido", icon: LayoutGrid, tabs: ["courses", "editor", "paths", "news"] },
+    { id: "content", label: "Contenido", icon: LayoutGrid, tabs: ["courses", "editor", "paths", "news", "documentos"] },
     { id: "people", label: "Personas", icon: Users, tabs: ["employees", "groups", "puestos"] },
     { id: "tracking", label: "Seguimiento", icon: ClipboardList, tabs: ["seguimiento", "reviews"] },
     { id: "system", label: "Sistema", icon: Settings, tabs: ["notificaciones", "backup"] },
@@ -7051,6 +7283,7 @@ function AdminPanel({
     editor: draft.id ? "Editar formación" : "Nueva formación",
     paths: "Rutas",
     news: "Novedades",
+    documentos: "Documentos",
     employees: "Empleados",
     groups: "Grupos",
     puestos: "Puestos",
@@ -7340,13 +7573,24 @@ function AdminPanel({
 
       {tab === "editor" && (
         <div className="rounded-xl border bg-white p-4 space-y-4 shadow-sm" style={{ borderColor: "#00000012" }}>
-          {duplicateAttachmentsNotice > 0 && (
+          {(duplicateAttachmentsNotice > 0 || duplicateVideosNotice > 0) && (
             <div style={{ ...DS.card, padding: "var(--sp-3)", backgroundColor: "var(--warning-soft)", border: "none", display: "flex", alignItems: "center", gap: 8 }}>
               <AlertTriangle size={15} style={{ color: "var(--warning)", flexShrink: 0 }} />
               <div style={{ fontSize: "var(--text-xs)", color: "var(--warning-text)" }}>
-                Esta es una copia — {duplicateAttachmentsNotice} documento{duplicateAttachmentsNotice === 1 ? "" : "s"} adjunto{duplicateAttachmentsNotice === 1 ? "" : "s"} del original no se ha{duplicateAttachmentsNotice === 1 ? "" : "n"} copiado (para no compartir el mismo archivo entre las dos). Vuelve a subirlo{duplicateAttachmentsNotice === 1 ? "" : "s"} aquí si hace falta.
+                Esta es una copia — {[
+                  duplicateAttachmentsNotice > 0 ? `${duplicateAttachmentsNotice} documento${duplicateAttachmentsNotice === 1 ? "" : "s"} adjunto${duplicateAttachmentsNotice === 1 ? "" : "s"}` : null,
+                  duplicateVideosNotice > 0 ? `${duplicateVideosNotice} vídeo${duplicateVideosNotice === 1 ? "" : "s"} propio${duplicateVideosNotice === 1 ? "" : "s"}` : null,
+                ].filter(Boolean).join(" y ")} del original no se ha{(duplicateAttachmentsNotice + duplicateVideosNotice) === 1 ? "" : "n"} copiado (para no compartir el mismo archivo entre las dos). Vuelve a subirlo{(duplicateAttachmentsNotice + duplicateVideosNotice) === 1 ? "" : "s"} aquí si hace falta.
               </div>
-              <button onClick={() => setDuplicateAttachmentsNotice(0)} style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: "var(--warning-text)", flexShrink: 0 }}><X size={14} /></button>
+              <button
+                onClick={() => {
+                  setDuplicateAttachmentsNotice(0);
+                  setDuplicateVideosNotice(0);
+                }}
+                style={{ marginLeft: "auto", border: "none", background: "none", cursor: "pointer", color: "var(--warning-text)", flexShrink: 0 }}
+              >
+                <X size={14} />
+              </button>
             </div>
           )}
 
@@ -7400,6 +7644,24 @@ function AdminPanel({
               ))}
             </select>
           </label>
+
+          <label className="block text-xs font-semibold text-gray-500 mb-1">
+            Departamento (opcional)
+            <select
+              value={draft.departmentGroupId || ""}
+              onChange={(e) => setDraft((d) => ({ ...d, departmentGroupId: e.target.value || null }))}
+              className="mt-1 w-full text-sm rounded-md border px-3 py-2 font-normal text-gray-900"
+              style={{ borderColor: "#00000020" }}
+            >
+              <option value="">General / Interdepartamental (aparece en todos los filtros)</option>
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>{g.name}</option>
+              ))}
+            </select>
+          </label>
+          <div className="text-[11px] text-gray-400 -mt-2">
+            Poner un departamento no cambia quién la ve — eso lo sigue decidiendo la asignación de más abajo. Solo permite filtrar por departamento dentro del Catálogo, algo útil sobre todo en Protocolos.
+          </div>
 
           <label className="block text-xs font-semibold text-gray-500 mb-1">
             Descripción
@@ -7544,12 +7806,11 @@ function AdminPanel({
                     className="w-full text-xs rounded-md border px-2 py-1.5"
                     style={{ borderColor: "#00000018" }}
                   />
-                  <input
-                    value={mod.videoUrl}
-                    onChange={(e) => updateModuleField(mi, "videoUrl", e.target.value)}
-                    placeholder="URL de vídeo para este módulo (opcional)"
-                    className="w-full text-xs rounded-md border px-2 py-1.5"
-                    style={{ borderColor: "#00000018" }}
+                  <VideoFieldEditor
+                    label="Vídeo del módulo (opcional)"
+                    videoUrl={mod.videoUrl}
+                    videoFile={mod.videoFile}
+                    onSetVideoUrl={(v) => updateModuleField(mi, "videoUrl", v)}
                   />
 
                   <div>
@@ -7763,7 +8024,11 @@ function AdminPanel({
             </div>
           ) : (
             <>
-              <TextInput label="URL del vídeo (YouTube o Vimeo)" value={draft.videoUrl} onChange={(v) => setDraft((d) => ({ ...d, videoUrl: v }))} placeholder="https://www.youtube.com/watch?v=..." />
+              <VideoFieldEditor
+                videoUrl={draft.videoUrl}
+                videoFile={draft.videoFile}
+                onSetVideoUrl={(v) => setDraft((d) => ({ ...d, videoUrl: v }))}
+              />
               <TextInput label="URL de la presentación (link embebible)" value={draft.presentationUrl} onChange={(v) => setDraft((d) => ({ ...d, presentationUrl: v }))} placeholder="https://..." />
 
           <div>
@@ -8026,6 +8291,10 @@ function AdminPanel({
 
       {tab === "paths" && (
         <PathsAdminTab paths={paths} courses={courses} groups={groups} employees={employees} onSavePath={onSavePath} onDeletePath={onDeletePath} mode={mode} />
+      )}
+
+      {tab === "documentos" && mode !== "team" && (
+        <DocumentosAdminTab courses={courses} onDeleteAttachment={onDeleteAttachment} />
       )}
 
       {tab === "puestos" && mode !== "team" && (
