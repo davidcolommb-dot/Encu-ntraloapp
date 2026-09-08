@@ -7146,6 +7146,7 @@ function AdminPanel({
   const [showPreview, setShowPreview] = useState(false);
   const [courseListSearch, setCourseListSearch] = useState("");
   const [courseListCategoryFilter, setCourseListCategoryFilter] = useState("");
+  const [courseListDepartmentFilter, setCourseListDepartmentFilter] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   function handleSaveClick() {
@@ -7451,6 +7452,19 @@ function AdminPanel({
                   <option key={cat.id} value={cat.id}>{cat.label}</option>
                 ))}
               </select>
+              {groups.length > 0 && (
+                <select
+                  value={courseListDepartmentFilter}
+                  onChange={(e) => setCourseListDepartmentFilter(e.target.value)}
+                  style={{ padding: "7px 10px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", fontSize: "var(--text-sm)", color: "var(--text-primary)" }}
+                >
+                  <option value="">Todos los departamentos</option>
+                  <option value="__general__">General / Interdepartamental</option>
+                  {groups.map((g) => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              )}
             </div>
           )}
           {courses.length === 0 && <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No hay formaciones todavía.</div>}
@@ -7460,6 +7474,7 @@ function AdminPanel({
               (c) =>
                 !!c.archived === showArchived &&
                 (!courseListCategoryFilter || c.category === courseListCategoryFilter) &&
+                (!courseListDepartmentFilter || (courseListDepartmentFilter === "__general__" ? !c.departmentGroupId : c.departmentGroupId === courseListDepartmentFilter)) &&
                 (!courseListSearch.trim() || c.title.toLowerCase().includes(courseListSearch.trim().toLowerCase()))
             );
             return (
