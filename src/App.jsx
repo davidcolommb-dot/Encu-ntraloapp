@@ -4922,11 +4922,54 @@ function CategoryPicker({ onSelectCategory, pendingCountByCategory }) {
 function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, selectedCategory, onSelectCategory, paths = [], onOpenPath }) {
   const [showCompleted, setShowCompleted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // El filtro de departamento vive aquí arriba, a nivel de todo el Catálogo
+  // — no dentro de un campo concreto — y se mantiene aunque cambies de
+  // campo, para que sea de verdad un filtro general, no algo que hay que
+  // volver a elegir cada vez que entras a Protocolos, Genérica, etc.
   const [departmentFilter, setDepartmentFilter] = useState(null);
-  useEffect(() => {
-    setDepartmentFilter(null);
-  }, [selectedCategory]);
-  const visibleCourses = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses.filter((c) => !c.archived);
+  const visibleCoursesRaw = currentUser ? courses.filter((c) => isAssignedToUser(c, currentUser, groups)) : courses.filter((c) => !c.archived);
+
+  // Una formación "General / Interdepartamental" (sin departamento puesto)
+  // se ve siempre, filtres por el departamento que filtres — el filtro solo
+  // hace desaparecer las que son específicas de OTRO departamento distinto.
+  const visibleCourses = departmentFilter
+    ? visibleCoursesRaw.filter((c) => c.departmentGroupId === departmentFilter || !c.departmentGroupId)
+    : visibleCoursesRaw;
+
+  // Departamentos que existen de verdad en el catálogo (con al menos una
+  // formación puesta), para no mostrar chips vacíos que no llevan a nada.
+  const departmentsInCatalog = groups.filter((g) => visibleCoursesRaw.some((c) => c.departmentGroupId === g.id));
+
+  const departmentFilterBar = departmentsInCatalog.length > 0 && (
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", marginRight: 2 }}>Departamento:</span>
+      <button
+        onClick={() => setDepartmentFilter(null)}
+        style={{
+          display: "flex", alignItems: "center", gap: 5, fontSize: "var(--text-xs)", fontWeight: 600,
+          padding: "6px 12px", borderRadius: "var(--radius-full)", cursor: "pointer", border: "none",
+          backgroundColor: !departmentFilter ? "var(--brand)" : "var(--bg-inset)",
+          color: !departmentFilter ? "white" : "var(--text-secondary)",
+        }}
+      >
+        <Building2 size={12} /> Todos
+      </button>
+      {departmentsInCatalog.map((g) => (
+        <button
+          key={g.id}
+          onClick={() => setDepartmentFilter(g.id)}
+          style={{
+            display: "flex", alignItems: "center", gap: 5, fontSize: "var(--text-xs)", fontWeight: 600,
+            padding: "6px 12px", borderRadius: "var(--radius-full)", cursor: "pointer", border: "none",
+            backgroundColor: departmentFilter === g.id ? "var(--brand)" : "var(--bg-inset)",
+            color: departmentFilter === g.id ? "white" : "var(--text-secondary)",
+          }}
+        >
+          <Building2 size={12} /> {g.name}
+        </button>
+      ))}
+    </div>
+  );
 
   // Pendientes por campo, y el total — cuentan aunque la formación no tenga
   // fecha límite puesta; lo único que importa es que esté asignada y no
@@ -5017,6 +5060,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
     return (
       <div>
         {searchBar}
+        {departmentFilterBar && <div style={{ marginBottom: "var(--sp-3)" }}>{departmentFilterBar}</div>}
         <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: "var(--sp-3)" }}>
           {totalResults} resultado{totalResults === 1 ? "" : "s"} para "{searchQuery}"
         </div>
@@ -5075,6 +5119,7 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
       <div>
         {searchBar}
         {totalPendingBanner}
+        {departmentFilterBar && <div style={{ marginBottom: "var(--sp-4)" }}>{departmentFilterBar}</div>}
         <CategoryPicker onSelectCategory={onSelectCategory} pendingCountByCategory={currentUser ? pendingCountByCategory : null} />
       </div>
     );
@@ -5082,26 +5127,15 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
 
   const cat = categoryMeta(selectedCategory);
   const categoryCourses = visibleCourses.filter((c) => c.category === selectedCategory);
-
-  // Filtro visual por departamento — solo se muestra si, dentro de este
-  // campo, hay al menos una formación con departamento puesto. Si nadie usa
-  // esto en un campo concreto, no aparece nada raro ahí.
-  const departmentsInCategory = groups.filter((g) => categoryCourses.some((c) => c.departmentGroupId === g.id));
-  // Una formación "General / Interdepartamental" (sin departamento puesto)
-  // se ve siempre, filtres por el departamento que filtres — el filtro solo
-  // hace desaparecer las que son específicas de OTRO departamento distinto.
-  const categoryCoursesFiltered = departmentFilter
-    ? categoryCourses.filter((c) => c.departmentGroupId === departmentFilter || !c.departmentGroupId)
-    : categoryCourses;
-
-  const pendingCourses = sortByUrgency(categoryCoursesFiltered.filter((c) => !currentUser || getStatus(currentUser, c.id) !== "completada"));
-  const completedCourses = currentUser ? categoryCoursesFiltered.filter((c) => getStatus(currentUser, c.id) === "completada") : [];
+  const pendingCourses = sortByUrgency(categoryCourses.filter((c) => !currentUser || getStatus(currentUser, c.id) !== "completada"));
+  const completedCourses = currentUser ? categoryCourses.filter((c) => getStatus(currentUser, c.id) === "completada") : [];
   const CatIcon = cat.icon;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-5)" }}>
       {searchBar}
       {totalPendingBanner}
+      {departmentFilterBar}
       <button onClick={() => onSelectCategory(null)} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-sm)", fontWeight: 500, color: "var(--text-secondary)", border: "none", background: "none", cursor: "pointer", padding: 0, width: "fit-content" }}>
         <ChevronLeft size={15} /> Catálogo
       </button>
@@ -5115,36 +5149,6 @@ function Catalog({ courses, currentUser, groups, getStatus, onOpenCourse, select
           <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>Ordenadas por plazo más urgente</div>
         </div>
       </div>
-
-      {departmentsInCategory.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-          <button
-            onClick={() => setDepartmentFilter(null)}
-            style={{
-              display: "flex", alignItems: "center", gap: 5, fontSize: "var(--text-xs)", fontWeight: 600,
-              padding: "6px 12px", borderRadius: "var(--radius-full)", cursor: "pointer", border: "none",
-              backgroundColor: !departmentFilter ? cat.color : "var(--bg-inset)",
-              color: !departmentFilter ? "white" : "var(--text-secondary)",
-            }}
-          >
-            <Building2 size={12} /> Todos los departamentos
-          </button>
-          {departmentsInCategory.map((g) => (
-            <button
-              key={g.id}
-              onClick={() => setDepartmentFilter(g.id)}
-              style={{
-                display: "flex", alignItems: "center", gap: 5, fontSize: "var(--text-xs)", fontWeight: 600,
-                padding: "6px 12px", borderRadius: "var(--radius-full)", cursor: "pointer", border: "none",
-                backgroundColor: departmentFilter === g.id ? cat.color : "var(--bg-inset)",
-                color: departmentFilter === g.id ? "white" : "var(--text-secondary)",
-              }}
-            >
-              <Building2 size={12} /> {g.name}
-            </button>
-          ))}
-        </div>
-      )}
 
       {pendingCourses.length === 0 ? (
         <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", padding: "var(--sp-4) 0" }}>
