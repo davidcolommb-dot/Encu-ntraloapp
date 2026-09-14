@@ -1,5 +1,5 @@
 import { uid } from "../utils/ids";
-import { todayISO } from "../utils/dates";
+import { todayISO, daysFromNow } from "../utils/dates";
 
 export const SEED_PUESTOS = [
   {
