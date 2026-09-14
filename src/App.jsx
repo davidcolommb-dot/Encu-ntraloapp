@@ -8,7 +8,6 @@ import {
 import * as XLSX from "xlsx";
 
 // --- Módulos propios (ver src/lib, src/theme, src/constants, src/utils, src/services) ---
-import { supabase } from "./lib/supabaseClient";
 import { msalClientId, msalTenantId, msalIsConfigured, getMsalInstance, loginWithMicrosoftPopup } from "./lib/msalAuth";
 import { BRAND, AVATAR_PALETTE, MAX_ATTACHMENT_BYTES } from "./theme/tokens";
 import { CATEGORIES, categoryMeta, CHECKLIST_LEVELS, CHECKLIST_CATEGORIES, checklistCategoryMeta, EMPLOYEE_STATUS } from "./constants/categories";
@@ -4202,7 +4201,16 @@ function CourseDetail({ course, currentUser, status, record, quizAnswers, setQui
         <DeadlineChip deadline={course.deadline} completed={status === "completada"} />
       </div>
 
-      {course.videoFile ? (
+      {course.videoServerPath ? (
+        <div>
+          <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
+            <PlayCircle size={14} /> VÍDEO DE LA FORMACIÓN
+          </div>
+          <div style={{ borderRadius: "var(--radius-lg)", overflow: "hidden", backgroundColor: "#000", aspectRatio: "16/9" }}>
+            <video controls src={`/api/videos/${course.videoServerPath.folder}/${course.videoServerPath.filename}`} style={{ width: "100%", height: "100%" }} title={course.title} />
+          </div>
+        </div>
+      ) : course.videoFile ? (
         <div>
           <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: "var(--text-muted)", marginBottom: "var(--sp-2)", display: "flex", alignItems: "center", gap: 6 }}>
             <PlayCircle size={14} /> VÍDEO DE LA FORMACIÓN
@@ -4472,7 +4480,11 @@ function ModuleContent({ module: mod, alreadyPassed, quizAnswers, setQuizAnswers
         </div>
       )}
 
-      {mod.videoFile ? (
+      {mod.videoServerPath ? (
+        <div style={{ borderRadius: "var(--radius-lg)", overflow: "hidden", backgroundColor: "#000", aspectRatio: "16/9" }}>
+          <video controls src={`/api/videos/${mod.videoServerPath.folder}/${mod.videoServerPath.filename}`} style={{ width: "100%", height: "100%" }} title={mod.title} />
+        </div>
+      ) : mod.videoFile ? (
         <div style={{ borderRadius: "var(--radius-lg)", overflow: "hidden", backgroundColor: "#000", aspectRatio: "16/9" }}>
           <video controls src={mod.videoFile.url} style={{ width: "100%", height: "100%" }} title={mod.title} />
         </div>
@@ -4795,13 +4807,111 @@ function ModularCourseDetail({ course, currentUser, record, quizAnswers, setQuiz
 // almacenamiento en el plan gratuito de Supabase, unos pocos vídeos lo
 // habrían llenado del todo. Se deja solo el enlace externo (YouTube, Vimeo,
 // Google Drive...), que no ocupa nada de tu espacio.
-function VideoFieldEditor({ videoUrl, videoFile, onSetVideoUrl, label = "Vídeo" }) {
+// Editor de vídeo: enlace externo (YouTube/Vimeo), o un vídeo guardado en el
+// servidor físico de vídeos de la empresa, organizado por carpetas. Ya no se
+// sube nada a través del navegador — el vídeo tiene que estar ya puesto en
+// la carpeta correspondiente del servidor (por Lisbet, o quien gestione ese
+// servidor); aquí solo se elige cuál mostrar.
+function VideoFieldEditor({ videoUrl, videoFile, videoServerPath, onSetVideoUrl, onSetVideoServerPath, label = "Vídeo" }) {
+  const [mode, setMode] = useState(videoServerPath ? "servidor" : "externo");
+  const [folder, setFolder] = useState(videoServerPath?.folder || "");
+  const [files, setFiles] = useState([]);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [folderError, setFolderError] = useState("");
+
+  async function handleFolderLookup() {
+    if (!folder.trim()) return;
+    setLoadingFiles(true);
+    setFolderError("");
+    try {
+      const res = await fetch(`/api/videos/${encodeURIComponent(folder.trim())}`);
+      if (!res.ok) {
+        setFolderError("No se encuentra esa carpeta en el servidor de vídeos. Comprueba el nombre exacto.");
+        setFiles([]);
+      } else {
+        const data = await res.json();
+        setFiles(data.files || []);
+        if ((data.files || []).length === 0) setFolderError("Esa carpeta existe pero no tiene ningún vídeo dentro todavía.");
+      }
+    } catch (err) {
+      setFolderError("No se pudo conectar con el servidor de vídeos.");
+    }
+    setLoadingFiles(false);
+  }
+
   return (
     <div>
-      <TextInput label={label} value={videoUrl} onChange={onSetVideoUrl} placeholder="https://www.youtube.com/watch?v=..." />
+      <div className="text-xs font-semibold text-gray-500 mb-1">{label}</div>
+      <div className="flex gap-1 mb-2">
+        <button
+          onClick={() => setMode("externo")}
+          className="text-xs font-semibold px-3 py-1 rounded-full"
+          style={{ backgroundColor: mode === "externo" ? "var(--brand)" : "var(--bg-inset)", color: mode === "externo" ? "white" : "var(--text-secondary)" }}
+        >
+          Enlace externo
+        </button>
+        <button
+          onClick={() => setMode("servidor")}
+          className="text-xs font-semibold px-3 py-1 rounded-full"
+          style={{ backgroundColor: mode === "servidor" ? "var(--brand)" : "var(--bg-inset)", color: mode === "servidor" ? "white" : "var(--text-secondary)" }}
+        >
+          Vídeo del servidor de la empresa
+        </button>
+      </div>
+
+      {mode === "externo" ? (
+        <input
+          value={videoUrl}
+          onChange={(e) => onSetVideoUrl(e.target.value)}
+          placeholder="https://www.youtube.com/watch?v=..."
+          className="w-full text-sm rounded-md border px-3 py-2"
+          style={{ borderColor: "#00000020" }}
+        />
+      ) : (
+        <div>
+          <div className="flex gap-2 mb-2">
+            <input
+              value={folder}
+              onChange={(e) => setFolder(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleFolderLookup()}
+              placeholder="Nombre de la carpeta (ej. protocolos, bienvenida...)"
+              className="flex-1 text-sm rounded-md border px-3 py-2"
+              style={{ borderColor: "#00000020" }}
+            />
+            <button
+              onClick={handleFolderLookup}
+              disabled={loadingFiles || !folder.trim()}
+              className="text-sm font-semibold px-3 rounded-md"
+              style={{ backgroundColor: "var(--bg-inset)", color: "var(--text-primary)", opacity: loadingFiles || !folder.trim() ? 0.5 : 1 }}
+            >
+              {loadingFiles ? "Buscando..." : "Buscar"}
+            </button>
+          </div>
+          {folderError && <div className="text-xs mb-2" style={{ color: "var(--danger)" }}>{folderError}</div>}
+          {files.length > 0 && (
+            <select
+              value={videoServerPath?.filename || ""}
+              onChange={(e) => onSetVideoServerPath(e.target.value ? { folder: folder.trim(), filename: e.target.value } : null)}
+              className="w-full text-sm rounded-md border px-3 py-2"
+              style={{ borderColor: "#00000020" }}
+            >
+              <option value="">Elige un vídeo de esta carpeta...</option>
+              {files.map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+          )}
+          {videoServerPath && (
+            <div className="text-xs mt-2" style={{ color: "var(--success)" }}>
+              Vídeo seleccionado: {videoServerPath.folder}/{videoServerPath.filename}
+            </div>
+          )}
+        </div>
+      )}
+
       {videoFile && (
         <div className="text-[11px] mt-1" style={{ color: "var(--warning)" }}>
-          Esta formación tiene un vídeo propio subido de antes ({videoFile.name || "sin nombre"}). Sigue funcionando, pero ya no se pueden subir vídeos nuevos — si quieres quitarlo, pégale un enlace externo aquí arriba y lo sustituye.
+          Esta formación tiene un vídeo antiguo subido cuando probamos el almacenamiento en la nube ({videoFile.name || "sin nombre"}). Sigue funcionando, pero elige uno del servidor de la empresa aquí arriba si quieres sustituirlo.
         </div>
       )}
     </div>
@@ -5872,6 +5982,7 @@ function AdminPanel({
     description: "",
     videoUrl: "",
     videoFile: null,
+    videoServerPath: null,
     presentationUrl: "",
     deadline: "",
     passPct: 70,
@@ -5963,6 +6074,7 @@ function AdminPanel({
       description: "",
       videoUrl: "",
       videoFile: null,
+      videoServerPath: null,
       presentationUrl: "",
       deadline: "",
       passPct: 70,
@@ -6140,7 +6252,7 @@ function AdminPanel({
 
   // ---- Gestión de módulos (formaciones secuenciales) ----
   const NEW_MODULE_TEMPLATE = () => ({
-    id: uid(), title: "", body: "", videoUrl: "", videoFile: null, passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [],
+    id: uid(), title: "", body: "", videoUrl: "", videoFile: null, videoServerPath: null, passPct: 70, quiz: [{ ...emptyQuestion }], attachments: [],
     relatedCourses: [], externalLinks: [], practicalCase: null, checklistSteps: [],
   });
   // Plantillas de partida: cambian solo la estructura (no rellenan texto de
@@ -7032,7 +7144,9 @@ function AdminPanel({
                     label="Vídeo del módulo (opcional)"
                     videoUrl={mod.videoUrl}
                     videoFile={mod.videoFile}
+                    videoServerPath={mod.videoServerPath}
                     onSetVideoUrl={(v) => updateModuleField(mi, "videoUrl", v)}
+                    onSetVideoServerPath={(vp) => updateModuleField(mi, "videoServerPath", vp)}
                   />
 
                   <div>
@@ -7249,7 +7363,9 @@ function AdminPanel({
               <VideoFieldEditor
                 videoUrl={draft.videoUrl}
                 videoFile={draft.videoFile}
+                videoServerPath={draft.videoServerPath}
                 onSetVideoUrl={(v) => setDraft((d) => ({ ...d, videoUrl: v }))}
+                onSetVideoServerPath={(vp) => setDraft((d) => ({ ...d, videoServerPath: vp }))}
               />
               <TextInput label="URL de la presentación (link embebible)" value={draft.presentationUrl} onChange={(v) => setDraft((d) => ({ ...d, presentationUrl: v }))} placeholder="https://..." />
 
