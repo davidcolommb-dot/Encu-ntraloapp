@@ -1,0 +1,19 @@
+# Dependencias (se reinstalan con "npm install", no hace falta subirlas)
+node_modules/
+
+# Resultado de compilar el frontend (se genera con "npm run build")
+dist/
+
+# Variables de entorno con datos reales (email, Supabase, Microsoft...)
+.env
+.env.local
+
+# Configuración del servidor con datos REALES (IP, contraseñas de SQL
+# Server, acceso al servidor de vídeos...) — esta información es privada de
+# la empresa y nunca debe subirse a GitHub, ni siquiera a un repositorio
+# privado. Solo se sube la plantilla (server.config.example.js), nunca este.
+config/server.config.js
+
+# Archivos temporales del sistema
+.DS_Store
+*.log
